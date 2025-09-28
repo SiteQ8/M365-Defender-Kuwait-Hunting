@@ -97,9 +97,9 @@ let KuwaitFinancialTerms = pack_array(
 );
 let KuwaitBrokerageCompanies = pack_array(
     "kamco.com.kw",                  // KAMCO Investment Company
-    "nbk.com",                       // NBK Capital
+    "nbkwealth.com",                       // NBK Capital
     "gulfbank.com.kw",               // Gulf Bank Capital
-    "kfh.com",                       // KFH Capital
+    "kfhtrade.com",                       // KFH Capital
     "ahli-capital.com.kw",           // Ahli Capital
     "markaz.com",                    // Al Markaz
     "arzan.com.kw",                  // Arzan Financial Group
