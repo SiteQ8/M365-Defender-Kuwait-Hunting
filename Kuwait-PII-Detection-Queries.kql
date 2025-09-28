@@ -1,0 +1,418 @@
+# Kuwait Civil ID and Personal Data Detection Queries
+
+## Overview
+Advanced hunting queries for detecting Kuwait Civil ID numbers and personal data in Microsoft 365 environments. These queries help organizations comply with Kuwait Data Protection Law and prevent sensitive personal information exposure.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Kuwait Civil ID Detection
+
+### Primary Civil ID Detection Query
+**Description**: Detects Kuwait Civil ID numbers with proper validation and masking  
+**Pattern**: YYMMDDSSSSCC (12 digits with birth date validation)  
+**Use Case**: Data Loss Prevention, Privacy Protection
+
+```kql
+// Kuwait Civil ID Detection with Birth Date Validation
+// Civil ID format: YYMMDDSSSSCC (12 digits)
+// YY = Birth year, MM = Birth month (01-12), DD = Birth day (01-31)
+// SSSS = Sequence number, CC = Check digits
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any ("civil", "id", "هوية", "مدنية", "civil id", "هوية مدنية") 
+    or Body has_any ("civil", "id", "هوية", "مدنية", "civil id", "هوية مدنية")
+| extend CivilIDMatches = extract_all(@"(?:^|[^\d])([0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{6})(?:[^\d]|$)", Body)
+| where array_length(CivilIDMatches) > 0
+| extend ValidCivilIDs = CivilIDMatches
+| mv-expand ValidCivilID = ValidCivilIDs to typeof(string)
+| extend 
+    BirthYear = toint(substring(ValidCivilID, 0, 2)),
+    BirthMonth = toint(substring(ValidCivilID, 2, 2)),
+    BirthDay = toint(substring(ValidCivilID, 4, 2)),
+    SequenceNumber = substring(ValidCivilID, 6, 4),
+    CheckDigits = substring(ValidCivilID, 10, 2)
+| where BirthMonth between (1 .. 12) and BirthDay between (1 .. 31)
+| extend 
+    EstimatedBirthYear = case(
+        BirthYear <= 25, 2000 + BirthYear,  // Assuming 0-25 = 2000-2025
+        BirthYear >= 26, 1900 + BirthYear,  // Assuming 26-99 = 1926-1999
+        1900 + BirthYear
+    ),
+    MaskedCivilID = strcat(substring(ValidCivilID, 0, 6), "XXXXXX"),
+    RiskLevel = case(
+        not(SenderFromAddress endswith ".kw"), "High - Foreign sender",
+        AttachmentCount > 0, "Medium - Contains attachments",
+        "Low - Domestic communication"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MaskedCivilID,
+    EstimatedBirthYear,
+    RiskLevel,
+    ThreatTypes,
+    DeliveryLocation,
+    AttachmentCount
+| order by Timestamp desc
+```
+
+### Civil ID in File Content (SharePoint/OneDrive)
+**Description**: Scans files for Civil ID numbers in SharePoint and OneDrive
+
+```kql
+// Civil ID Detection in File Content
+CloudAppEvents
+| where Timestamp > ago(24h)
+| where Application in ("Microsoft SharePoint Online", "OneDrive for Business")
+| where ActionType in ("FileDownloaded", "FileUploaded", "FileModified", "FileAccessed")
+| where RawEventData has_any ("civil", "id", "هوية", "مدنية") 
+    or ObjectName has_any ("civil", "id", "هوية", "مدنية")
+| extend CivilIDPattern = extract_all(@"(?:^|[^\d])([0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{6})(?:[^\d]|$)", tostring(RawEventData))
+| where array_length(CivilIDPattern) > 0
+| extend 
+    FileName = tostring(RawEventData.ObjectId),
+    SiteUrl = tostring(RawEventData.SiteUrl),
+    FileExtension = extract(@"\.([^.]+)$", 1, tostring(RawEventData.ObjectId))
+| extend 
+    SensitiveFileType = case(
+        FileExtension in ("pdf", "docx", "doc", "xlsx", "xls"), "Document",
+        FileExtension in ("jpg", "jpeg", "png", "gif"), "Image", 
+        FileExtension in ("txt", "csv"), "Text",
+        "Other"
+    )
+| project 
+    Timestamp,
+    AccountDisplayName,
+    Application,
+    ActionType,
+    FileName,
+    SiteUrl,
+    SensitiveFileType,
+    CivilIDCount = array_length(CivilIDPattern),
+    IPAddress,
+    UserAgent
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Passport Detection
+
+### Kuwait Passport Number Pattern
+**Description**: Detects Kuwait passport numbers in various formats
+
+```kql
+// Kuwait Passport Number Detection
+// Kuwait passport formats: Usually 8-9 characters
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any ("passport", "جواز", "travel", "سفر") 
+    or Body has_any ("passport", "جواز", "travel document", "وثيقة سفر")
+| extend KuwaitPassports = extract_all(@"\b([A-Z]{1,2}[0-9]{7,8})\b", Body)
+| where array_length(KuwaitPassports) > 0
+| mv-expand PassportNumber = KuwaitPassports to typeof(string)
+| where strlen(PassportNumber) in (8, 9)
+| extend 
+    PassportPrefix = substring(PassportNumber, 0, 2),
+    MaskedPassport = strcat(substring(PassportNumber, 0, 2), "XXXXXX"),
+    DocumentType = "Kuwait Passport",
+    RiskAssessment = case(
+        not(SenderFromAddress endswith ".kw"), "High - Foreign communication",
+        Subject has_any ("urgent", "expire", "عاجل", "منتهي"), "Medium - Urgency indicators",
+        "Low - Standard passport communication"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MaskedPassport,
+    DocumentType,
+    RiskAssessment,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Phone Number Detection
+
+### Comprehensive Kuwait Phone Number Patterns
+**Description**: Detects all Kuwait phone number formats including mobile and landline
+
+```kql
+// Kuwait Phone Number Detection
+// Mobile formats: 5xxx, 6xxx, 9xxx (8 digits)  
+// Landline format: 2xxx (8 digits)
+// International: +965 or 965 prefix
+EmailEvents
+| where Timestamp > ago(24h)
+| extend KuwaitPhoneNumbers = extract_all(@"(?:\+965|965)?\s*([2569]\d{7})", Body)
+| where array_length(KuwaitPhoneNumbers) > 0
+| mv-expand PhoneNumber = KuwaitPhoneNumbers to typeof(string)
+| extend 
+    PhoneType = case(
+        startswith(PhoneNumber, "2"), "Landline",
+        startswith(PhoneNumber, "5"), "Mobile (Zain/Viva)",
+        startswith(PhoneNumber, "6"), "Mobile (Ooredoo)",
+        startswith(PhoneNumber, "9"), "Mobile (Zain)",
+        "Unknown"
+    ),
+    MaskedPhone = strcat(substring(PhoneNumber, 0, 3), "XXXXX"),
+    Provider = case(
+        startswith(PhoneNumber, "5"), "Zain/Viva",
+        startswith(PhoneNumber, "6"), "Ooredoo", 
+        startswith(PhoneNumber, "9"), "Zain",
+        "Kuwait Telecom"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MaskedPhone,
+    PhoneType,
+    Provider,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait IBAN Detection
+
+### Kuwait IBAN Pattern Recognition
+**Description**: Detects Kuwait International Bank Account Numbers
+
+```kql
+// Kuwait IBAN Detection (KW format)
+// Format: KW + 2 check digits + 4 bank code + 22 alphanumeric account number
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any ("account", "bank", "transfer", "حساب", "بنك", "تحويل") 
+    or Body has_any ("IBAN", "account number", "رقم الحساب")
+| extend KuwaitIBAN = extract_all(@"\bKW\d{2}[A-Z0-9]{26}\b", Body)
+| where array_length(KuwaitIBAN) > 0
+| mv-expand IBAN = KuwaitIBAN to typeof(string)
+| extend 
+    CheckDigits = substring(IBAN, 2, 2),
+    BankCode = substring(IBAN, 4, 4),
+    MaskedIBAN = strcat("KW", substring(IBAN, 2, 2), substring(IBAN, 4, 4), "XXXXXXXXXXXXXXXXXXXXXX"),
+    KnownBanks = case(
+        BankCode == "NBOK", "National Bank of Kuwait",
+        BankCode == "GULB", "Gulf Bank",
+        BankCode == "KFHO", "Kuwait Finance House", 
+        BankCode == "COMB", "Commercial Bank of Kuwait",
+        BankCode == "AHLI", "Al Ahli Bank of Kuwait",
+        BankCode == "BOUB", "Boubyan Bank",
+        BankCode == "WARI", "Warba Bank",
+        BankCode == "BURB", "Burgan Bank",
+        "Unknown Bank"
+    )
+| extend 
+    RiskLevel = case(
+        not(SenderFromAddress endswith ".kw") and KnownBanks != "Unknown Bank", "Critical - Foreign sender with valid bank",
+        Subject has_any ("transfer", "payment", "تحويل", "دفع"), "High - Financial transaction",
+        "Medium - Banking communication"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MaskedIBAN,
+    KnownBanks,
+    RiskLevel,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Employment and Salary Documents
+
+### Kuwait Employment Document Detection
+**Description**: Detects salary certificates and employment documents
+
+```kql
+// Kuwait Salary Certificate and Employment Document Detection
+let KuwaitEmploymentTerms = pack_array(
+    "salary certificate", "شهادة راتب", "employment certificate", "شهادة عمل",
+    "work permit", "إذن عمل", "residence permit", "إقامة", 
+    "NOC", "no objection certificate", "عدم ممانعة",
+    "ministry of social affairs", "وزارة الشؤون الاجتماعية",
+    "PACI", "الهيئة العامة للمعلومات المدنية", 
+    "manpower authority", "هيئة القوى العاملة",
+    "kuwait labor law", "قانون العمل الكويتي"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (KuwaitEmploymentTerms) or Body has_any (KuwaitEmploymentTerms)
+| extend 
+    DocumentCategory = case(
+        Subject has_any ("salary certificate", "شهادة راتب"), "Salary Certificate",
+        Subject has_any ("work permit", "إذن عمل"), "Work Permit", 
+        Subject has_any ("residence permit", "إقامة"), "Residence Document",
+        Subject has_any ("NOC", "عدم ممانعة"), "No Objection Certificate",
+        Subject has_any ("PACI", "الهيئة العامة"), "PACI Document",
+        "Employment Document"
+    ),
+    GovernmentEntity = case(
+        Body has_any ("PACI", "الهيئة العامة للمعلومات"), "PACI",
+        Body has_any ("ministry of social affairs", "وزارة الشؤون"), "Ministry of Social Affairs",
+        Body has_any ("manpower", "القوى العاملة"), "Manpower Authority",
+        Body has_any ("ministry of interior", "وزارة الداخلية"), "Ministry of Interior",
+        "Other Government"
+    ),
+    RiskLevel = case(
+        AttachmentCount > 0 and not(SenderFromAddress endswith ".gov.kw"), "High - Non-gov sender with attachments",
+        Subject has_any ("urgent", "expire", "عاجل", "منتهي الصلاحية"), "Medium - Urgency tactics",
+        not(SenderFromAddress endswith ".kw"), "Medium - Foreign sender",
+        "Low - Normal employment communication"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    DocumentCategory,
+    GovernmentEntity,
+    RiskLevel,
+    AttachmentCount,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Combined Personal Data Detection
+
+### Comprehensive Kuwait PII Scanner
+**Description**: Detects multiple types of Kuwait personal data in single query
+
+```kql
+// Comprehensive Kuwait Personal Data Detection
+EmailEvents
+| where Timestamp > ago(24h)
+| extend 
+    // Civil ID Detection
+    CivilIDs = extract_all(@"(?:^|[^\d])([0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{6})(?:[^\d]|$)", Body),
+    // Phone Number Detection
+    PhoneNumbers = extract_all(@"(?:\+965|965)?\s*([2569]\d{7})", Body),
+    // IBAN Detection
+    IBANs = extract_all(@"\bKW\d{2}[A-Z0-9]{26}\b", Body),
+    // Passport Detection
+    Passports = extract_all(@"\b([A-Z]{1,2}[0-9]{7,8})\b", Body)
+| extend 
+    CivilIDCount = array_length(CivilIDs),
+    PhoneCount = array_length(PhoneNumbers),
+    IBANCount = array_length(IBANs),
+    PassportCount = array_length(Passports),
+    TotalPIICount = array_length(CivilIDs) + array_length(PhoneNumbers) + array_length(IBANs) + array_length(Passports)
+| where TotalPIICount > 0
+| extend 
+    PIITypes = strcat(
+        iff(CivilIDCount > 0, "Civil ID, ", ""),
+        iff(PhoneCount > 0, "Phone, ", ""),
+        iff(IBANCount > 0, "IBAN, ", ""),
+        iff(PassportCount > 0, "Passport, ", "")
+    ),
+    RiskScore = (CivilIDCount * 4) + (PhoneCount * 1) + (IBANCount * 3) + (PassportCount * 2),
+    RiskLevel = case(
+        RiskScore >= 8, "Critical",
+        RiskScore >= 5, "High", 
+        RiskScore >= 3, "Medium",
+        "Low"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    PIITypes = trim_end(", ", PIITypes),
+    CivilIDCount,
+    PhoneCount,
+    IBANCount,
+    PassportCount,
+    RiskScore,
+    RiskLevel,
+    ThreatTypes
+| order by RiskScore desc, Timestamp desc
+```
+
+---
+
+## Privacy Protection and Compliance
+
+### Data Retention and Privacy Query
+**Description**: Monitors data retention and privacy compliance for Kuwait data
+
+```kql
+// Kuwait Data Retention and Privacy Monitoring
+let KuwaitPIITerms = pack_array(
+    "civil id", "هوية مدنية", "passport", "جواز سفر", 
+    "salary", "راتب", "bank account", "حساب بنكي",
+    "phone number", "رقم الهاتف", "address", "عنوان"
+);
+CloudAppEvents
+| where Timestamp > ago(30d)  // Check last 30 days for retention analysis
+| where Application in ("Microsoft SharePoint Online", "OneDrive for Business", "Microsoft Exchange Online")
+| where ObjectName has_any (KuwaitPIITerms) or RawEventData has_any (KuwaitPIITerms)
+| extend 
+    DataAge = datetime_diff('day', now(), Timestamp),
+    RetentionStatus = case(
+        DataAge > 365, "Exceeds 1 year - Review required",
+        DataAge > 180, "Exceeds 6 months - Monitor",
+        DataAge > 90, "Exceeds 3 months - Standard",
+        "Recent data"
+    ),
+    DataCategory = case(
+        ObjectName has_any ("civil", "هوية"), "Civil ID Data",
+        ObjectName has_any ("passport", "جواز"), "Passport Data",
+        ObjectName has_any ("salary", "راتب"), "Employment Data", 
+        ObjectName has_any ("bank", "بنك"), "Financial Data",
+        "Personal Data"
+    )
+| where RetentionStatus contains "Review required" or RetentionStatus contains "Monitor"
+| summarize 
+    FileCount = count(),
+    OldestFile = min(Timestamp),
+    NewestFile = max(Timestamp),
+    MaxDataAge = max(DataAge)
+    by AccountDisplayName, DataCategory, RetentionStatus
+| order by MaxDataAge desc
+```
+
+---
+
+## Usage Guidelines
+
+### Query Deployment Best Practices
+1. **Test Environment First**: Always test queries in non-production
+2. **Performance Monitoring**: Monitor query execution times
+3. **False Positive Analysis**: Review results for accuracy
+4. **Privacy Compliance**: Ensure data masking is working
+5. **Regular Updates**: Update patterns based on new threats
+
+### Customization Notes
+- Replace `.kw` domain filters with your organization's domains
+- Adjust time windows based on your retention requirements
+- Modify risk scoring based on organizational risk appetite
+- Add additional personal data patterns as needed
+
+### Integration with SIEM
+These queries can be exported and adapted for:
+- **Splunk** - Convert to Splunk search syntax
+- **QRadar** - Adapt for AQL queries
+- **Azure Sentinel** - Use directly in KQL format
+- **Microsoft Sentinel** - Direct integration available
+
+---
+
+**Privacy Notice**: These queries automatically mask sensitive personal data for compliance with Kuwait Data Protection Law and international privacy regulations.
