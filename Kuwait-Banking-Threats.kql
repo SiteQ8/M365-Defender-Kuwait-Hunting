@@ -17,7 +17,7 @@ Advanced hunting queries specifically designed to detect threats targeting Kuwai
 ```kql
 // Kuwait Banking Domain Monitoring and Phishing Detection
 let KuwaitBanks = pack_array(
-    "nbk.com", "nbok.com",           // National Bank of Kuwait
+    "nbk.com",           // National Bank of Kuwait
     "gulfbank.com.kw",               // Gulf Bank
     "kfh.com",                       // Kuwait Finance House
     "cbk.com.kw",                    // Commercial Bank of Kuwait  
