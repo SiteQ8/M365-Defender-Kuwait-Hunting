@@ -1,0 +1,475 @@
+# Arabic Language Analysis and Mixed Language Detection
+
+## Overview
+Advanced hunting queries for analyzing Arabic language content, detecting mixed Arabic-English communications, and identifying Arabic-specific social engineering patterns in Microsoft 365 environments.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Arabic Content Detection and Analysis
+
+### Arabic Language Email Content Analysis
+**Description**: Detects and analyzes Arabic language content in email communications
+
+```kql
+// Arabic Language Content Detection and Analysis
+EmailEvents
+| where Timestamp > ago(24h)
+| extend 
+    // Detect Arabic characters in subject and body
+    HasArabicSubject = Subject matches regex @"[\u0600-\u06FF]",
+    HasArabicBody = Body matches regex @"[\u0600-\u06FF]",
+    HasEnglishSubject = Subject matches regex @"[A-Za-z]",
+    HasEnglishBody = Body matches regex @"[A-Za-z]",
+    // Count Arabic and English words
+    ArabicWordsSubject = array_length(extract_all(@"[\u0600-\u06FF]+", Subject)),
+    ArabicWordsBody = array_length(extract_all(@"[\u0600-\u06FF]+", Body)),
+    EnglishWordsSubject = array_length(extract_all(@"\b[A-Za-z]+\b", Subject)),
+    EnglishWordsBody = array_length(extract_all(@"\b[A-Za-z]+\b", Body))
+| where HasArabicSubject or HasArabicBody  // Focus on content with Arabic text
+| extend 
+    TotalArabicWords = ArabicWordsSubject + ArabicWordsBody,
+    TotalEnglishWords = EnglishWordsSubject + EnglishWordsBody,
+    TotalWords = TotalArabicWords + TotalEnglishWords,
+    ArabicPercentage = case(TotalWords > 0, (todouble(TotalArabicWords) / todouble(TotalWords)) * 100, 0),
+    LanguagePattern = case(
+        HasArabicSubject and HasArabicBody and not(HasEnglishSubject) and not(HasEnglishBody), "Arabic Only",
+        HasEnglishSubject and HasEnglishBody and not(HasArabicSubject) and not(HasArabicBody), "English Only",
+        HasArabicSubject and HasArabicBody and HasEnglishSubject and HasEnglishBody, "Mixed Arabic-English",
+        HasArabicSubject and not(HasArabicBody), "Arabic Subject Only", 
+        HasArabicBody and not(HasArabicSubject), "Arabic Body Only",
+        "Other Pattern"
+    ),
+    // Common Arabic threat indicators
+    ArabicThreatKeywords = pack_array(
+        iff(Subject has_any ("عاجل", "مهم", "فوري", "سريع") or Body has_any ("عاجل", "مهم", "فوري", "سريع"), "Arabic urgency", ""),
+        iff(Subject has_any ("انقر", "اضغط", "حمل", "ادخل") or Body has_any ("انقر", "اضغط", "حمل", "ادخل"), "Arabic action words", ""),
+        iff(Subject has_any ("الله", "مبارك", "حلال", "حرام") or Body has_any ("الله", "مبارك", "حلال", "حرام"), "Religious terms", ""),
+        iff(Subject has_any ("بنك", "حساب", "تحويل", "دفع") or Body has_any ("بنك", "حساب", "تحويل", "دفع"), "Arabic banking terms", ""),
+        iff(Subject has_any ("الحكومة", "وزارة", "هيئة", "مصلحة") or Body has_any ("الحكومة", "وزارة", "هيئة", "مصلحة"), "Arabic government terms", "")
+    )
+| mv-expand ArabicThreatKeyword = ArabicThreatKeywords
+| where isnotempty(ArabicThreatKeyword)
+| extend 
+    SuspicionLevel = case(
+        LanguagePattern == "Mixed Arabic-English" and ArabicThreatKeyword == "Arabic urgency", "High - Mixed language urgency",
+        ArabicThreatKeyword == "Arabic action words" and UrlCount > 2, "High - Arabic phishing attempt",
+        ArabicThreatKeyword == "Religious terms" and not(SenderFromAddress has_any (".kw", "islamic", "mosque")), "Medium - Religious manipulation",
+        ArabicThreatKeyword == "Arabic banking terms" and not(SenderFromAddress has_any ("bank", "بنك")), "High - Arabic banking fraud",
+        ArabicThreatKeyword == "Arabic government terms" and not(SenderFromAddress endswith "gov.kw"), "High - Arabic government impersonation",
+        "Low - General Arabic content"
+    )
+| where SuspicionLevel != "Low - General Arabic content"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    LanguagePattern,
+    ArabicPercentage,
+    ArabicThreatKeyword,
+    SuspicionLevel,
+    TotalArabicWords,
+    TotalEnglishWords,
+    ThreatTypes,
+    UrlCount
+| order by Timestamp desc
+```
+
+---
+
+## Mixed Language Social Engineering Detection
+
+### Arabic-English Code-Switching Analysis
+**Description**: Analyzes mixed Arabic-English communications for social engineering patterns
+
+```kql
+// Arabic-English Mixed Language Social Engineering Detection
+EmailEvents
+| where Timestamp > ago(24h)
+| extend 
+    HasArabic = Body matches regex @"[\u0600-\u06FF]",
+    HasEnglish = Body matches regex @"[A-Za-z]",
+    // Extract Arabic and English phrases
+    ArabicPhrases = extract_all(@"[\u0600-\u06FF\s]+", Body),
+    EnglishPhrases = extract_all(@"[A-Za-z\s]+", Body)
+| where HasArabic and HasEnglish  // Focus on mixed language content
+| extend 
+    // Analyze code-switching patterns
+    StartsWithArabic = Body startswith_cs "[\u0600-\u06FF]",
+    EndsWithEnglish = Body endswith_cs "[A-Za-z]",
+    // Count language switches
+    ArabicSegments = array_length(ArabicPhrases),
+    EnglishSegments = array_length(EnglishPhrases),
+    // Detect suspicious mixed patterns
+    SuspiciousMixedPatterns = pack_array(
+        // Arabic greeting + English action
+        iff(Body has_any ("السلام عليكم", "أهلا", "مرحبا") and Body has_any ("click", "download", "verify"), "Arabic greeting, English action", ""),
+        // English subject + Arabic urgency  
+        iff(not(Subject matches regex @"[\u0600-\u06FF]") and Body has_any ("عاجل", "فوري", "مهم جداً"), "English subject, Arabic urgency", ""),
+        // Arabic authority + English instructions
+        iff(Body has_any ("البنك", "الحكومة", "الوزارة") and Body has_any ("please click", "update your", "verify account"), "Arabic authority, English instructions", ""),
+        // Religious Arabic + English scam
+        iff(Body has_any ("الله يبارك", "إن شاء الله", "بسم الله") and Body has_any ("prize", "winner", "money"), "Religious Arabic, English scam", ""),
+        // Arabic threat + English solution
+        iff(Body has_any ("مشكلة", "خطأ", "مخالفة") and Body has_any ("solve", "fix", "resolve"), "Arabic threat, English solution", "")
+    ),
+    // Detect transliterated Arabic in Latin script
+    TransliteratedArabic = pack_array(
+        iff(Body has_any ("inshallah", "mashallah", "habibi", "yalla", "khalas"), "Transliterated religious/cultural terms", ""),
+        iff(Body has_any ("mabrouk", "ahlan", "marhabba", "tfaddal"), "Transliterated greetings", ""),
+        iff(Body has_any ("haram", "halal", "zakat", "sadaqa"), "Transliterated Islamic terms", "")
+    )
+| mv-expand SuspiciousPattern = SuspiciousMixedPatterns, TranslitPattern = TransliteratedArabic
+| where isnotempty(SuspiciousPattern) or isnotempty(TranslitPattern)
+| extend 
+    MixedLanguageRisk = case(
+        SuspiciousPattern == "Arabic greeting, English action", "High - Cultural familiarity + action request",
+        SuspiciousPattern == "Religious Arabic, English scam", "Critical - Religious manipulation + scam",
+        SuspiciousPattern == "Arabic authority, English instructions", "High - Authority impersonation with instructions",
+        SuspiciousPattern == "Arabic threat, English solution", "High - Threat + solution social engineering",
+        TranslitPattern == "Transliterated religious/cultural terms", "Medium - Cultural targeting attempt",
+        "Low - General mixed language"
+    ),
+    CulturalTargeting = case(
+        Body has_any ("أخي", "أختي", "حبيبي") and Body has_any ("brother", "sister", "friend"), "Familial address targeting",
+        Body has_any ("الله", "النبي") and Body has_any ("god", "prophet", "blessed"), "Religious authority targeting", 
+        Body has_any ("الكويت", "الوطن") and Body has_any ("kuwait", "homeland", "country"), "Patriotic targeting",
+        "General cultural references"
+    )
+| where MixedLanguageRisk != "Low - General mixed language"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    SuspiciousPattern,
+    TranslitPattern,
+    MixedLanguageRisk,
+    CulturalTargeting,
+    ArabicSegments,
+    EnglishSegments,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Arabic Script and Character Analysis
+
+### Arabic Script Manipulation Detection
+**Description**: Detects manipulation of Arabic script for phishing and impersonation
+
+```kql
+// Arabic Script and Character Manipulation Detection
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject matches regex @"[\u0600-\u06FF]" or Body matches regex @"[\u0600-\u06FF]"
+| extend 
+    // Detect different Arabic character sets and variations
+    HasArabicPresentation = Body matches regex @"[\uFB50-\uFDFF]",  // Arabic Presentation Forms-A
+    HasArabicPresentationB = Body matches regex @"[\uFE70-\uFEFF]", // Arabic Presentation Forms-B
+    HasArabicSupplement = Body matches regex @"[\u0750-\u077F]",     // Arabic Supplement
+    HasArabicExtended = Body matches regex @"[\u08A0-\u08FF]",       // Arabic Extended-A
+    // Look for suspicious character combinations
+    HasMixedDirections = Body matches regex @"[\u0600-\u06FF].*[A-Za-z].*[\u0600-\u06FF]", // Arabic-English-Arabic pattern
+    HasRepeatedChars = Body matches regex @"(.)\1{4,}",              // 5+ repeated characters
+    // Detect homograph attacks using similar-looking characters
+    SuspiciousHomographs = pack_array(
+        iff(Body contains "ا" and Body contains "l", "Arabic Alef + Latin L", ""),  // ا vs l
+        iff(Body contains "و" and Body contains "g", "Arabic Waw + Latin g", ""),   // و vs g  
+        iff(Body contains "ر" and Body contains "r", "Arabic Ra + Latin r", ""),     // ر vs r
+        iff(Body contains "ن" and Body contains "u", "Arabic Noon + Latin u", ""),   // ن vs u
+        iff(Body contains "ه" and Body contains "o", "Arabic Ha + Latin o", "")      // ه vs o
+    ),
+    // Arabic diacritic analysis
+    HasDiacritics = Body matches regex @"[\u064B-\u065F\u0670\u06D6-\u06ED]",
+    ExcessiveDiacritics = array_length(extract_all(@"[\u064B-\u065F\u0670\u06D6-\u06ED]", Body)) > 10,
+    // Direction and formatting analysis
+    HasRTLMark = Body contains "\u200F",  // Right-to-Left Mark
+    HasLTRMark = Body contains "\u200E",  // Left-to-Right Mark
+    HasDirectionOverride = Body matches regex @"[\u202D\u202E]"  // Direction Override characters
+| mv-expand SuspiciousHomograph = SuspiciousHomographs
+| where isnotempty(SuspiciousHomograph) or HasMixedDirections or ExcessiveDiacritics or HasDirectionOverride
+| extend 
+    ScriptManipulation = case(
+        HasDirectionOverride, "Critical - Direction override manipulation",
+        SuspiciousHomograph != "", "High - Arabic-Latin homograph attack", 
+        HasMixedDirections and UrlCount > 0, "High - Mixed direction text with URLs",
+        ExcessiveDiacritics, "Medium - Excessive diacritic marks",
+        HasRepeatedChars, "Medium - Repeated character pattern",
+        "Low - General script variation"
+    ),
+    ImpersonationRisk = case(
+        SuspiciousHomograph != "" and Subject has_any ("bank", "بنك", "government", "حكومة"), "Critical - Authority impersonation with homographs",
+        HasMixedDirections and SenderDisplayName has_any ("bank", "بنك"), "High - Banking impersonation with mixed text",
+        HasDirectionOverride and Subject has_any ("urgent", "عاجل"), "High - Urgency with direction manipulation",
+        "Medium - General impersonation risk"
+    )
+| where ScriptManipulation != "Low - General script variation"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    SuspiciousHomograph,
+    ScriptManipulation,
+    ImpersonationRisk,
+    HasMixedDirections,
+    ExcessiveDiacritics,
+    HasDirectionOverride,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Arabic Keyboard Layout and Typosquatting
+
+### Arabic Keyboard Typosquatting Detection
+**Description**: Detects typosquatting attacks using Arabic keyboard layouts
+
+```kql
+// Arabic Keyboard Layout Typosquatting Detection
+let ArabicKeyboardMap = datatable(ArabicChar:string, EnglishChar:string)
+[
+    "ض", "q", "ص", "w", "ث", "e", "ق", "r", "ف", "t", "غ", "y", "ع", "u", "ه", "i", "خ", "o", "ح", "p",
+    "ش", "a", "س", "s", "ي", "d", "ب", "f", "ل", "g", "ا", "h", "ت", "j", "ن", "k", "م", "l",
+    "ء", "z", "ؤ", "x", "ر", "c", "لا", "v", "ى", "b", "ة", "n", "و", "m"
+];
+EmailUrlInfo
+| where Timestamp > ago(7d)
+| extend Domain = tostring(parse_url(Url).Host)
+| where Domain has_any ("bank", "بنك", "gov", "حكومة") or Domain contains "kuwait" or Domain contains "الكويت"
+| join EmailEvents on NetworkMessageId
+| extend 
+    // Check for Arabic-English character substitution in domains
+    SuspiciousDomainChars = pack_array(
+        iff(Domain contains "ا" and Domain has_any (".com", ".org", ".net"), "Arabic in Latin domain", ""),
+        iff(Domain contains "و" and not(Domain has_any (".kw", ".sa", ".ae")), "Arabic Waw in non-Arabic TLD", ""),
+        iff(Domain contains "ب" and Domain has_any ("bank", "بنك"), "Arabic Ba in banking domain", ""),
+        iff(Domain matches regex @"[a-zA-Z][\u0600-\u06FF][a-zA-Z]", "Mixed Arabic-Latin in domain", "")
+    ),
+    // Check for keyboard layout confusion
+    KeyboardConfusion = pack_array(
+        iff(Domain contains "q" and Subject contains "ض", "Q/ض keyboard confusion", ""),
+        iff(Domain contains "w" and Subject contains "ص", "W/ص keyboard confusion", ""), 
+        iff(Domain contains "s" and Subject contains "س", "S/س keyboard confusion", ""),
+        iff(Domain contains "d" and Subject contains "ي", "D/ي keyboard confusion", ""),
+        iff(Domain contains "f" and Subject contains "ب", "F/ب keyboard confusion", "")
+    ),
+    // Arabic brand impersonation  
+    ArabicBrandImpersonation = case(
+        Domain contains "بنك" and not(Domain has_any (".kw", ".sa", ".ae")), "Arabic 'bank' in non-Arab TLD",
+        Domain contains "الكويت" and not(Domain endswith ".kw"), "Arabic 'Kuwait' in non-KW domain",
+        Domain contains "حكومة" and not(Domain endswith "gov.kw"), "Arabic 'government' in non-gov domain",
+        Domain contains "إسلامي" and not(Domain has_any ("islamic", "kfh", "boubyan")), "Arabic 'Islamic' impersonation",
+        "No Arabic brand impersonation"
+    )
+| mv-expand SuspiciousDomainChar = SuspiciousDomainChars, KeyConfusion = KeyboardConfusion
+| where isnotempty(SuspiciousDomainChar) or isnotempty(KeyConfusion) or ArabicBrandImpersonation != "No Arabic brand impersonation"
+| extend 
+    TyposquattingRisk = case(
+        ArabicBrandImpersonation != "No Arabic brand impersonation", "Critical - Arabic brand impersonation",
+        SuspiciousDomainChar == "Mixed Arabic-Latin in domain", "High - Mixed script domain attack",
+        KeyConfusion != "", "Medium - Keyboard layout confusion", 
+        SuspiciousDomainChar != "", "Medium - Arabic character manipulation",
+        "Low - General domain suspicion"
+    )
+| where TyposquattingRisk != "Low - General domain suspicion"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    Domain,
+    Url,
+    SuspiciousDomainChar,
+    KeyConfusion,
+    ArabicBrandImpersonation,
+    TyposquattingRisk,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Arabic Regional Dialect Detection
+
+### Kuwait Arabic Dialect and Regional Targeting
+**Description**: Detects targeting using Kuwait-specific Arabic dialect and regional expressions
+
+```kql
+// Kuwait Arabic Dialect and Regional Expression Detection
+let KuwaitDialectTerms = pack_array(
+    // Kuwait-specific terms
+    "شلونك", "شلونج",                  // How are you (Kuwaiti)
+    "وايد", "هوايا",                   // A lot/very (Gulf dialect)
+    "يلا بينا", "يلا نروح",            // Let's go (Gulf)
+    "صج", "صدق",                      // Really/true (Gulf)
+    "شسمه", "شسمها",                   // What's his/her name (Kuwaiti)
+    "تسلم", "الله يعطيك العافية",       // Thank you (Gulf)
+    "ماكو شغل", "ما في شغل",          // No problem (Gulf)
+    "بس شوي", "شوية بس",              // Just a little (Gulf)
+    "حبيبي", "حبيبتي",                // My dear (Gulf affectionate)
+    "لا تخاف", "لا تشيل هم",           // Don't worry (Gulf)
+);
+let GulfRegionalTerms = pack_array(
+    "خوش", "زين",                     // Good/nice (Gulf)
+    "شكثر", "كم",                     // How much (Gulf vs Standard)
+    "جذي", "هيجي",                    // Like this (Gulf)
+    "وين", "فين",                     // Where (Gulf vs Egyptian)
+    "شنو", "ايش",                     // What (Gulf vs Levantine)
+    "حق", "علشان",                    // For/because (Gulf)
+);
+let KuwaitCulturalReferences = pack_array(
+    "الديوانية", "ديوان",              // Traditional Kuwaiti gathering
+    "القرقيعان", "قرقيعان",           // Kuwaiti cultural tradition
+    "المجبوس", "مجبوس",               // Traditional Kuwaiti dish
+    "الصيد", "النوخذة",               // Traditional sea/pearling terms
+    "الفريج", "فريج",                 // Traditional Kuwaiti neighborhood
+    "السدو", "سدو",                   // Traditional Kuwaiti weaving
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (KuwaitDialectTerms) or Subject has_any (GulfRegionalTerms) or Subject has_any (KuwaitCulturalReferences)
+    or Body has_any (KuwaitDialectTerms) or Body has_any (GulfRegionalTerms) or Body has_any (KuwaitCulturalReferences)
+| extend 
+    DialectCategory = case(
+        Subject has_any (KuwaitDialectTerms) or Body has_any (KuwaitDialectTerms), "Kuwait Dialect",
+        Subject has_any (GulfRegionalTerms) or Body has_any (GulfRegionalTerms), "Gulf Regional Dialect",
+        Subject has_any (KuwaitCulturalReferences) or Body has_any (KuwaitCulturalReferences), "Kuwait Cultural References",
+        "Standard Arabic"
+    ),
+    LocalTargeting = case(
+        Body has_any ("شلونك", "شلونج") and not(SenderFromAddress endswith ".kw"), "Non-Kuwait sender using Kuwait greeting",
+        Body has_any ("الديوانية", "القرقيعان") and not(SenderFromAddress endswith ".kw"), "Non-Kuwait sender using Kuwait culture",
+        Body has_any ("وايد", "هوايا") and Subject has_any ("urgent", "money", "prize"), "Gulf dialect + scam indicators",
+        Body has_any ("حبيبي", "حبيبتي") and UrlCount > 2, "Affectionate terms + multiple URLs",
+        "General dialect usage"
+    ),
+    RegionalAuthenticity = case(
+        DialectCategory == "Kuwait Dialect" and SenderFromAddress endswith ".kw", "Authentic - Kuwait dialect from Kuwait sender",
+        DialectCategory == "Gulf Regional Dialect" and SenderFromAddress has_any (".kw", ".ae", ".sa", ".qa"), "Authentic - Gulf dialect from Gulf sender",
+        DialectCategory == "Kuwait Cultural References" and not(SenderFromAddress endswith ".kw"), "Suspicious - Kuwait culture from non-Kuwait sender",
+        DialectCategory == "Kuwait Dialect" and not(SenderFromAddress endswith ".kw"), "Suspicious - Kuwait dialect from foreign sender",
+        "Unclear authenticity"
+    ),
+    CulturalManipulation = case(
+        LocalTargeting contains "Kuwait greeting" and Subject has_any ("bank", "government"), "High - Cultural familiarity + authority",
+        LocalTargeting contains "Kuwait culture" and Subject has_any ("prize", "money"), "High - Cultural targeting + financial scam", 
+        LocalTargeting contains "Gulf dialect + scam", "Medium - Regional targeting + scam",
+        LocalTargeting contains "Affectionate terms", "Medium - Emotional manipulation",
+        "Low - General cultural reference"
+    )
+| where RegionalAuthenticity contains "Suspicious" or CulturalManipulation contains "High"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    DialectCategory,
+    LocalTargeting,
+    RegionalAuthenticity,
+    CulturalManipulation,
+    ThreatTypes,
+    UrlCount
+| order by Timestamp desc
+```
+
+---
+
+## Arabic Text Direction and Formatting Attacks
+
+### Bidirectional Text and RTL Manipulation Detection  
+**Description**: Detects attacks using Arabic text direction and bidirectional formatting
+
+```kql
+// Arabic Bidirectional Text and RTL Manipulation Detection
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject matches regex @"[\u0600-\u06FF]" or Body matches regex @"[\u0600-\u06FF]"
+| extend 
+    // Detect Unicode bidirectional control characters
+    HasRTLOverride = Body contains "\u202E" or Subject contains "\u202E",      // Right-to-Left Override
+    HasLTROverride = Body contains "\u202D" or Subject contains "\u202D",      // Left-to-Right Override
+    HasRTLEmbedding = Body contains "\u202B" or Subject contains "\u202B",     // Right-to-Left Embedding
+    HasLTREmbedding = Body contains "\u202A" or Subject contains "\u202A",     // Left-to-Right Embedding
+    HasPopDirectional = Body contains "\u202C" or Subject contains "\u202C",   // Pop Directional Formatting
+    HasRTLMark = Body contains "\u200F" or Subject contains "\u200F",          // Right-to-Left Mark
+    HasLTRMark = Body contains "\u200E" or Subject contains "\u200E",          // Left-to-Right Mark
+    // Analyze text direction patterns
+    ArabicEnglishMixed = Body matches regex @"[\u0600-\u06FF]+.*[A-Za-z]+.*[\u0600-\u06FF]+",
+    EnglishArabicMixed = Body matches regex @"[A-Za-z]+.*[\u0600-\u06FF]+.*[A-Za-z]+",
+    // Count bidirectional formatting characters
+    BidiCharCount = array_length(extract_all(@"[\u202A-\u202E\u200E-\u200F]", Body)),
+    // Detect suspicious patterns
+    SuspiciousBidiPatterns = pack_array(
+        iff(HasRTLOverride and Subject has_any ("bank", "بنك"), "RTL override with banking terms", ""),
+        iff(HasLTROverride and Body has_any ("click", "انقر"), "LTR override with action words", ""),
+        iff(BidiCharCount > 5 and UrlCount > 0, "Excessive bidi chars with URLs", ""),
+        iff(HasRTLEmbedding and HasLTREmbedding, "Mixed RTL/LTR embedding", ""),
+        iff(ArabicEnglishMixed and HasRTLOverride, "Mixed text with RTL override", "")
+    )
+| mv-expand SuspiciousBidiPattern = SuspiciousBidiPatterns
+| where isnotempty(SuspiciousBidiPattern) or BidiCharCount > 3
+| extend 
+    BidirectionalRisk = case(
+        SuspiciousBidiPattern == "RTL override with banking terms", "Critical - Banking impersonation with RTL manipulation",
+        SuspiciousBidiPattern == "Excessive bidi chars with URLs", "High - URL masking with bidi characters",
+        SuspiciousBidiPattern == "Mixed text with RTL override", "High - Text direction manipulation attack",
+        SuspiciousBidiPattern == "LTR override with action words", "Medium - Action masking with LTR override",
+        BidiCharCount > 10, "Medium - Excessive bidirectional formatting",
+        "Low - Normal bidirectional text"
+    ),
+    DirectionSpoofing = case(
+        HasRTLOverride and not(Body matches regex @"[\u0600-\u06FF]{10,}"), "Possible RTL spoofing - limited Arabic content",
+        HasLTROverride and Body matches regex @"[\u0600-\u06FF]{20,}", "Possible LTR spoofing - extensive Arabic content", 
+        HasRTLEmbedding and EnglishArabicMixed, "Possible embedding spoofing - mixed content",
+        "No apparent spoofing"
+    )
+| where BidirectionalRisk != "Low - Normal bidirectional text"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    SuspiciousBidiPattern,
+    BidirectionalRisk,
+    DirectionSpoofing,
+    BidiCharCount,
+    HasRTLOverride,
+    HasLTROverride,
+    ThreatTypes,
+    UrlCount
+| order by Timestamp desc
+```
+
+---
+
+## Usage Guidelines
+
+### Deployment Priorities
+1. **Arabic content analysis** - Deploy first for basic Arabic threat detection
+2. **Mixed language detection** - Critical for sophisticated social engineering
+3. **Script manipulation** - Important for advanced phishing detection  
+4. **Regional dialect analysis** - Valuable for local targeting identification
+
+### Customization Notes
+- Update Arabic keyword lists based on current threat intelligence
+- Add organization-specific Arabic terms and expressions
+- Adjust dialect detection for other GCC countries if needed
+- Monitor social media for emerging Arabic social engineering patterns
+
+### Performance Considerations
+- Arabic regex patterns can be computationally intensive
+- Consider sampling for large datasets to maintain performance
+- Use time-based filtering to focus on recent threats
+- Implement caching for frequently used Arabic pattern matches
+
+---
+
+**Language Analysis Note**: These queries provide comprehensive Arabic language security analysis capabilities, essential for protecting Arabic-speaking organizations from culturally and linguistically targeted cyber attacks.

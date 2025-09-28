@@ -1,0 +1,468 @@
+# Kuwait Cultural Events and Holiday-Themed Attacks
+
+## Overview  
+Advanced hunting queries to detect cyberattacks that leverage Kuwait's cultural events, Islamic holidays, and national celebrations for social engineering and targeted campaigns.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Islamic Holiday Themed Attacks
+
+### Ramadan and Eid Campaign Detection
+**Description**: Detects attacks using Ramadan, Eid, and other Islamic holidays for targeting
+
+```kql
+// Islamic Holiday and Cultural Event Targeting Detection
+let IslamicHolidays = pack_array(
+    // Ramadan terms
+    "ramadan", "رمضان", "ramadan mubarak", "رمضان مبارك", "iftar", "إفطار", 
+    "suhoor", "سحور", "tarawih", "تراويح", "laylat al qadr", "ليلة القدر",
+    // Eid terms  
+    "eid", "عيد", "eid mubarak", "عيد مبارك", "eid al fitr", "عيد الفطر",
+    "eid al adha", "عيد الأضحى", "eid prayer", "صلاة العيد", "eid gifts", "هدايا العيد",
+    // Hajj and Umrah
+    "hajj", "حج", "umrah", "عمرة", "pilgrimage", "الحج والعمرة", "mecca", "مكة",
+    "arafat", "عرفات", "hajj package", "باقة الحج", "umrah visa", "تأشيرة العمرة",
+    // Other Islamic events
+    "islamic new year", "السنة الهجرية الجديدة", "mawlid", "المولد النبوي",
+    "isra and miraj", "الإسراء والمعراج", "ashura", "عاشوراء"
+);
+let KuwaitCulturalTerms = pack_array(
+    "kuwait national day", "اليوم الوطني الكويتي", "liberation day", "يوم التحرير",
+    "independence day", "يوم الاستقلال", "constitution day", "يوم الدستور",
+    "national assembly", "مجلس الأمة", "amir", "أمير", "crown prince", "ولي العهد"
+);
+EmailEvents
+| where Timestamp > ago(30d)
+| where Subject has_any (IslamicHolidays) or Subject has_any (KuwaitCulturalTerms)
+    or Body has_any (IslamicHolidays) or Body has_any (KuwaitCulturalTerms)
+| where not(SenderFromAddress has_any (".kw", "islamicbank", "kfh.com", "gov.kw"))  // Exclude legitimate sources
+| extend 
+    CulturalTheme = case(
+        Subject has_any ("ramadan", "رمضان"), "Ramadan themed",
+        Subject has_any ("eid al fitr", "عيد الفطر"), "Eid Al-Fitr themed", 
+        Subject has_any ("eid al adha", "عيد الأضحى"), "Eid Al-Adha themed",
+        Subject has_any ("hajj", "حج", "umrah", "عمرة"), "Pilgrimage themed",
+        Subject has_any ("national day", "اليوم الوطني"), "Kuwait National Day themed",
+        Subject has_any ("liberation day", "يوم التحرير"), "Liberation Day themed",
+        Subject has_any ("mawlid", "المولد"), "Prophet's Birthday themed",
+        "Other cultural targeting"
+    ),
+    SuspiciousTiming = case(
+        datetime_part("month", Timestamp) in (3, 4), "Ramadan/Eid Al-Fitr period",
+        datetime_part("month", Timestamp) in (7, 8), "Hajj/Eid Al-Adha period", 
+        datetime_part("month", Timestamp) == 2, "Kuwait National Day period",
+        datetime_part("month", Timestamp) == 9, "Islamic New Year period",
+        "Regular period"
+    ),
+    RiskFactors = pack_array(
+        iff(UrlCount > 3, "Multiple URLs", ""),
+        iff(AttachmentCount > 0, "Contains attachments", ""),
+        iff(Subject has_any ("urgent", "limited", "expire", "عاجل", "محدود", "ينتهي"), "Urgency tactics", ""),
+        iff(Subject has_any ("charity", "donation", "زكاة", "صدقة"), "Charity scam indicators", ""),
+        iff(Subject has_any ("prize", "winner", "جائزة", "فائز"), "Prize scam indicators", ""),
+        iff(ThreatTypes != "", "Known threat indicators", "")
+    )
+| mv-expand RiskFactor = RiskFactors
+| where isnotempty(RiskFactor)
+| extend 
+    CulturalRisk = case(
+        RiskFactor == "Charity scam indicators" and CulturalTheme contains "Ramadan", "Critical - Ramadan charity scam",
+        RiskFactor == "Prize scam indicators" and CulturalTheme contains "Eid", "High - Eid prize scam", 
+        RiskFactor == "Urgency tactics" and CulturalTheme contains "Hajj", "High - Hajj booking scam",
+        RiskFactor == "Multiple URLs" and CulturalTheme contains "National Day", "Medium - National Day phishing",
+        "Low - General cultural targeting"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    CulturalTheme,
+    SuspiciousTiming,
+    RiskFactor,
+    CulturalRisk,
+    ThreatTypes,
+    UrlCount,
+    AttachmentCount
+| order by Timestamp desc
+```
+
+---
+
+## Charity and Zakat Scams
+
+### Islamic Charity and Zakat Fraud Detection  
+**Description**: Detects fraudulent charity appeals during Islamic seasons
+
+```kql
+// Islamic Charity and Zakat Fraud Detection
+let CharityTerms = pack_array(
+    "zakat", "زكاة", "sadaqah", "صدقة", "charity", "خيرية", "donation", "تبرع",
+    "orphan", "يتيم", "poor", "فقير", "needy", "محتاج", "humanitarian", "إنساني",
+    "mosque", "مسجد", "islamic center", "المركز الإسلامي", "quran", "القرآن",
+    "madrasa", "مدرسة", "islamic school", "مدرسة إسلامية", "waqf", "وقف"
+);
+let ZakatTypes = pack_array(
+    "zakat al fitr", "زكاة الفطر", "zakat al mal", "زكاة المال", 
+    "fitrah", "فطرة", "fidya", "فدية", "kaffarah", "كفارة"
+);
+EmailEvents
+| where Timestamp > ago(30d)
+| where Subject has_any (CharityTerms) or Subject has_any (ZakatTypes)
+    or Body has_any (CharityTerms) or Body has_any (ZakatTypes)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| extend 
+    CharityType = case(
+        Subject has_any ("zakat", "زكاة"), "Zakat Collection",
+        Subject has_any ("orphan", "يتيم"), "Orphan Support", 
+        Subject has_any ("mosque", "مسجد"), "Mosque Funding",
+        Subject has_any ("quran", "القرآن"), "Quran Distribution",
+        Subject has_any ("humanitarian", "إنساني"), "Humanitarian Aid",
+        "General Charity"
+    ),
+    FraudIndicators = pack_array(
+        iff(not(SenderDomain endswith ".kw") and not(SenderDomain has_any (".org", ".net")), "Suspicious domain", ""),
+        iff(Subject has_any ("urgent", "limited time", "عاجل", "وقت محدود"), "Urgency pressure", ""),
+        iff(Subject has_any ("100%", "all money", "جميع الأموال"), "Unrealistic promises", ""),
+        iff(Subject has_any ("cash only", "bitcoin", "نقد فقط"), "Suspicious payment methods", ""),
+        iff(Subject has_any ("tax deductible", "معفي من الضرائب"), "False tax claims", ""),
+        iff(UrlCount > 5, "Excessive links", "")
+    ),
+    IslamicSeason = case(
+        datetime_part("month", Timestamp) in (3, 4), "Ramadan season - High charity activity",
+        datetime_part("month", Timestamp) in (7, 8), "Hajj season - Charity focus", 
+        datetime_part("month", Timestamp) == 12, "Year-end - Zakat season",
+        "Regular season"
+    )
+| mv-expand FraudIndicator = FraudIndicators
+| where isnotempty(FraudIndicator)
+| extend 
+    CharityRisk = case(
+        FraudIndicator == "Suspicious payment methods", "Critical - Payment fraud",
+        FraudIndicator == "Suspicious domain" and IslamicSeason != "Regular season", "High - Seasonal charity fraud",
+        FraudIndicator == "Unrealistic promises", "High - Charity scam",
+        FraudIndicator == "False tax claims", "Medium - Tax fraud",
+        "Low - General charity fraud"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    CharityType,
+    FraudIndicator,
+    CharityRisk,
+    IslamicSeason,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait National Day and Liberation Day Attacks
+
+### Kuwait National Celebration Targeting
+**Description**: Detects attacks leveraging Kuwait's national holidays and celebrations
+
+```kql
+// Kuwait National Day and Liberation Day Targeting Detection
+let KuwaitNationalEvents = pack_array(
+    "national day", "اليوم الوطني", "independence day", "يوم الاستقلال",
+    "liberation day", "يوم التحرير", "constitution day", "يوم الدستور",
+    "kuwait towers", "أبراج الكويت", "flag day", "يوم العلم",
+    "martyrs day", "يوم الشهداء", "victory day", "يوم النصر"
+);
+let KuwaitSymbols = pack_array(
+    "amir", "الأمير", "sabah", "صباح", "crown prince", "ولي العهد",
+    "kuwait flag", "علم الكويت", "national anthem", "النشيد الوطني",
+    "liberation", "التحرير", "invasion", "الغزو", "resistance", "المقاومة"
+);
+let PatrioticTerms = pack_array(
+    "patriotic", "وطني", "national pride", "الفخر الوطني", "homeland", "الوطن",
+    "martyrs", "الشهداء", "heroes", "الأبطال", "freedom", "الحرية"
+);
+EmailEvents
+| where Timestamp > ago(60d)  // Extended period to catch seasonal campaigns
+| where Subject has_any (KuwaitNationalEvents) or Subject has_any (KuwaitSymbols) or Subject has_any (PatrioticTerms)
+    or Body has_any (KuwaitNationalEvents) or Body has_any (KuwaitSymbols) or Body has_any (PatrioticTerms)
+| extend 
+    NationalEventType = case(
+        Subject has_any ("national day", "اليوم الوطني"), "National Day (Feb 25)",
+        Subject has_any ("liberation day", "يوم التحرير"), "Liberation Day (Feb 26)",
+        Subject has_any ("independence day", "يوم الاستقلال"), "Independence Day (June 19)",
+        Subject has_any ("martyrs", "الشهداء"), "Martyrs Day remembrance",
+        Subject has_any ("amir", "الأمير", "crown prince"), "Royal family reference",
+        "General patriotic theme"
+    ),
+    SeasonalTiming = case(
+        datetime_part("month", Timestamp) == 2, "Critical - National Day season",
+        datetime_part("month", Timestamp) == 6, "High - Independence season",
+        datetime_part("month", Timestamp) in (1, 3), "Medium - National season proximity",
+        "Regular timing"
+    ),
+    PatrioticScam = case(
+        Subject has_any ("celebration", "احتفال") and Subject has_any ("prize", "جائزة"), "National celebration prize scam",
+        Subject has_any ("government", "الحكومة") and Subject has_any ("benefit", "مساعدة"), "Fake government benefit",
+        Subject has_any ("discount", "خصم") and Subject has_any ("national", "وطني"), "Patriotic discount scam",
+        Subject has_any ("survey", "استطلاع") and Subject has_any ("opinion", "رأي"), "Patriotic survey scam",
+        "General patriotic targeting"
+    ),
+    GovernmentImpersonation = case(
+        SenderDisplayName has_any ("government", "الحكومة", "ministry", "وزارة") and not(SenderFromAddress endswith "gov.kw"), "Government impersonation",
+        SenderDisplayName has_any ("amir", "الأمير") and not(SenderFromAddress endswith "gov.kw"), "Royal impersonation",
+        SenderDisplayName has_any ("national", "وطني") and not(SenderFromAddress endswith ".kw"), "National organization impersonation",
+        "No impersonation detected"
+    )
+| where PatrioticScam != "General patriotic targeting" or GovernmentImpersonation != "No impersonation detected"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    SenderDisplayName,
+    RecipientEmailAddress,
+    Subject,
+    NationalEventType,
+    SeasonalTiming,
+    PatrioticScam,
+    GovernmentImpersonation,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Arabic Language Cultural Targeting
+
+### Arabic Cultural and Religious Content Analysis
+**Description**: Analyzes Arabic cultural content for social engineering patterns
+
+```kql
+// Arabic Cultural and Religious Content Social Engineering Detection
+let ReligiousTerms = pack_array(
+    "allah", "الله", "prophet", "النبي", "islam", "الإسلام", "muslim", "مسلم",
+    "prayer", "صلاة", "dua", "دعاء", "blessing", "بركة", "halal", "حلال",
+    "haram", "حرام", "sunnah", "سنة", "hadith", "حديث", "quran", "القرآن"
+);
+let CulturalPressure = pack_array(
+    "religious duty", "واجب ديني", "islamic obligation", "التزام إسلامي",
+    "allah will reward", "الله سيجازي", "blessed", "مبارك", "paradise", "الجنة",
+    "sin", "ذنب", "punishment", "عقاب", "forgiveness", "مغفرة"
+);
+let ArabicUrgency = pack_array(
+    "عاجل", "مهم", "فوري", "سريع", "اليوم", "الآن", "محدود", "ينتهي"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (ReligiousTerms) or Subject has_any (CulturalPressure) or Subject has_any (ArabicUrgency)
+    or Body has_any (ReligiousTerms) or Body has_any (CulturalPressure) or Body has_any (ArabicUrgency)
+| extend 
+    HasArabic = Body matches regex @"[\u0600-\u06FF]",
+    HasEnglish = Body matches regex @"[A-Za-z]",
+    ArabicWords = array_length(extract_all(@"[\u0600-\u06FF]+", Body)),
+    EnglishWords = array_length(extract_all(@"\b[A-Za-z]+\b", Body))
+| where HasArabic == true  // Focus on Arabic content
+| extend 
+    LanguageMix = case(
+        HasArabic and HasEnglish, "Mixed Arabic-English",
+        HasArabic and not(HasEnglish), "Arabic only",
+        "Other"
+    ),
+    ReligiousManipulation = case(
+        Subject has_any ("allah will reward", "الله سيجازي"), "Critical - Divine reward manipulation",
+        Subject has_any ("religious duty", "واجب ديني"), "High - Religious obligation pressure",
+        Subject has_any ("sin", "ذنب", "punishment", "عقاب"), "High - Fear-based manipulation",
+        Subject has_any ("blessed", "مبارك", "paradise", "الجنة"), "Medium - Spiritual incentive",
+        "Low - General religious reference"
+    ),
+    CulturalTactics = pack_array(
+        iff(Subject has_any (ArabicUrgency), "Arabic urgency language", ""),
+        iff(Subject has_any ("brother", "أخي", "sister", "أختي"), "Familial address", ""),
+        iff(Subject has_any ("inshallah", "إن شاء الله", "mashallah", "ما شاء الله"), "Religious expressions", ""),
+        iff(Subject has_any ("muslim", "مسلم", "believer", "مؤمن"), "Religious identity appeal", "")
+    )
+| mv-expand CulturalTactic = CulturalTactics
+| where isnotempty(CulturalTactic) or ReligiousManipulation != "Low - General religious reference"
+| extend 
+    SocialEngineeringRisk = case(
+        ReligiousManipulation contains "Critical", "Critical",
+        ReligiousManipulation contains "High" and CulturalTactic == "Arabic urgency language", "High",
+        ReligiousManipulation contains "High", "High", 
+        CulturalTactic != "", "Medium",
+        "Low"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    LanguageMix,
+    ReligiousManipulation,
+    CulturalTactic,
+    SocialEngineeringRisk,
+    ArabicWords,
+    EnglishWords,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Cultural Events Calendar Attacks
+
+### Cultural Event Timing Analysis
+**Description**: Detects attack campaigns timed to coincide with Kuwait cultural calendar
+
+```kql
+// Kuwait Cultural Calendar and Event-Based Attack Timing Analysis
+let KuwaitCalendarEvents = pack_array(
+    // February events
+    "feb_national_liberation", "فبراير الوطني والتحرير",
+    // June events  
+    "june_independence", "يونيو الاستقلال",
+    // Islamic calendar (approximate)
+    "ramadan_march", "رمضان مارس", "eid_fitr_april", "عيد الفطر أبريل",
+    "hajj_july", "حج يوليو", "eid_adha_july", "عيد الأضحى يوليو"
+);
+EmailEvents
+| where Timestamp > ago(90d)  // Quarterly analysis
+| extend 
+    MonthNum = datetime_part("month", Timestamp),
+    DayNum = datetime_part("day", Timestamp),
+    CurrentSeason = case(
+        MonthNum == 2 and DayNum between (20 .. 28), "Kuwait National Days Peak",
+        MonthNum == 6 and DayNum between (15 .. 25), "Kuwait Independence Period",
+        MonthNum == 3, "Ramadan Season (varies by year)",
+        MonthNum == 4, "Eid Al-Fitr Season (varies by year)", 
+        MonthNum == 7, "Hajj and Eid Al-Adha Season (varies by year)",
+        MonthNum == 9, "Islamic New Year Season (varies by year)",
+        "Regular Period"
+    )
+| where CurrentSeason != "Regular Period"  // Focus on cultural seasons
+| where Subject has_any ("kuwait", "الكويت", "national", "وطني", "eid", "عيد", "ramadan", "رمضان")
+    or Body has_any ("kuwait", "الكويت", "national", "وطني", "eid", "عيد", "ramadan", "رمضان")
+| extend 
+    EventAlignment = case(
+        CurrentSeason contains "National Days" and Subject has_any ("national", "وطني"), "High - National day alignment",
+        CurrentSeason contains "Independence" and Subject has_any ("independence", "استقلال"), "High - Independence day alignment", 
+        CurrentSeason contains "Ramadan" and Subject has_any ("ramadan", "رمضان"), "High - Ramadan timing alignment",
+        CurrentSeason contains "Eid" and Subject has_any ("eid", "عيد"), "High - Eid timing alignment",
+        CurrentSeason contains "Hajj" and Subject has_any ("hajj", "حج"), "High - Hajj timing alignment",
+        "Medium - General cultural season"
+    ),
+    SeasonalScamType = case(
+        Subject has_any ("celebration", "احتفال") and UrlCount > 3, "Cultural celebration phishing",
+        Subject has_any ("discount", "خصم") and CurrentSeason contains "National", "Patriotic discount scam",
+        Subject has_any ("charity", "خيرية") and CurrentSeason contains "Ramadan", "Ramadan charity scam",
+        Subject has_any ("prize", "جائزة") and CurrentSeason contains "Eid", "Eid prize scam",
+        Subject has_any ("travel", "سفر") and CurrentSeason contains "Hajj", "Hajj travel scam",
+        "General cultural targeting"
+    )
+| where EventAlignment contains "High" and SeasonalScamType != "General cultural targeting"
+| summarize 
+    CampaignCount = count(),
+    UniqueRecipients = dcount(RecipientEmailAddress),
+    FirstCampaign = min(Timestamp),
+    LastCampaign = max(Timestamp),
+    ScamTypes = make_set(SeasonalScamType)
+    by CurrentSeason, SenderFromAddress, EventAlignment
+| extend CampaignDuration = datetime_diff('day', LastCampaign, FirstCampaign)
+| order by CampaignCount desc, LastCampaign desc
+```
+
+---
+
+## Kuwait Traditional and Modern Culture Targeting
+
+### Traditional vs Modern Cultural Targeting
+**Description**: Analyzes targeting that exploits traditional vs modern cultural values
+
+```kql
+// Kuwait Traditional vs Modern Cultural Value Targeting
+let TraditionalValues = pack_array(
+    "family honor", "شرف العائلة", "tribal", "قبيلة", "tradition", "تقليد",
+    "elder", "كبير العائلة", "respect", "احترام", "heritage", "تراث",
+    "bedouin", "بدوي", "desert", "صحراء", "camel", "جمل", "pearl diving", "الغوص"
+);
+let ModernValues = pack_array(
+    "technology", "تكنولوجيا", "innovation", "ابتكار", "startup", "شركة ناشئة",
+    "digital", "رقمي", "app", "تطبيق", "online", "أونلاين", "cryptocurrency", "عملة رقمية",
+    "social media", "وسائل التواصل", "influencer", "مؤثر", "viral", "فيروسي"
+);
+let GenerationalTerms = pack_array(
+    "young kuwaitis", "الشباب الكويتي", "generation", "جيل", "youth", "شباب",
+    "millennials", "جيل الألفية", "gen z", "الجيل زد", "teenagers", "المراهقين"
+);
+EmailEvents
+| where Timestamp > ago(30d)
+| where Subject has_any (TraditionalValues) or Subject has_any (ModernValues) or Subject has_any (GenerationalTerms)
+    or Body has_any (TraditionalValues) or Body has_any (ModernValues) or Body has_any (GenerationalTerms)
+| extend 
+    CulturalOrientation = case(
+        Subject has_any (TraditionalValues), "Traditional Culture Targeting",
+        Subject has_any (ModernValues), "Modern Culture Targeting",
+        Subject has_any (GenerationalTerms), "Generational Targeting",
+        "Mixed Cultural Targeting"
+    ),
+    TargetAudience = case(
+        Subject has_any ("elder", "كبير", "traditional", "تقليدي"), "Older Generation",
+        Subject has_any ("young", "شباب", "youth", "millennials"), "Younger Generation",
+        Subject has_any ("family", "عائلة"), "Family-Oriented",
+        "General Audience"
+    ),
+    CulturalManipulation = case(
+        Subject has_any ("family honor", "شرف العائلة"), "Critical - Family honor manipulation",
+        Subject has_any ("tradition", "تقليد") and Subject has_any ("loss", "فقدان"), "High - Tradition loss fear",
+        Subject has_any ("technology", "تكنولوجيا") and Subject has_any ("behind", "متأخر"), "High - Technology FOMO",
+        Subject has_any ("generation gap", "فجوة الأجيال"), "Medium - Generational conflict",
+        "Low - General cultural reference"
+    ),
+    ModernVsTraditional = case(
+        CulturalOrientation == "Traditional Culture Targeting" and TargetAudience == "Older Generation", "Traditional-to-Traditional",
+        CulturalOrientation == "Modern Culture Targeting" and TargetAudience == "Younger Generation", "Modern-to-Modern",
+        CulturalOrientation == "Traditional Culture Targeting" and TargetAudience == "Younger Generation", "Traditional-to-Modern (Cross-targeting)",
+        CulturalOrientation == "Modern Culture Targeting" and TargetAudience == "Older Generation", "Modern-to-Traditional (Cross-targeting)",
+        "Mixed Targeting"
+    )
+| where CulturalManipulation != "Low - General cultural reference"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    CulturalOrientation,
+    TargetAudience,
+    CulturalManipulation,
+    ModernVsTraditional,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Usage Guidelines
+
+### Seasonal Deployment Schedule
+- **January-February**: Deploy National Day queries before celebration season
+- **March-April**: Activate Ramadan/Eid queries during Islamic calendar periods  
+- **June**: Monitor Independence Day themed attacks
+- **July-August**: Watch for Hajj and Eid Al-Adha campaigns
+- **Year-round**: Maintain cultural targeting and Arabic language analysis
+
+### Customization Notes
+- Update Islamic calendar dates annually for accurate seasonal detection
+- Adjust cultural terms based on current local expressions and trends
+- Monitor social media for emerging cultural themes and update queries
+- Consider regional dialect variations in Arabic terms
+
+### Response Priorities
+1. **Religious manipulation** - Highest priority due to social engineering risk
+2. **National security themes** - Important for government targeting
+3. **Charity fraud** - Critical during religious seasons
+4. **Cultural celebration scams** - Monitor during event periods
+
+---
+
+**Cultural Note**: These queries help identify sophisticated social engineering attacks that exploit deep cultural and religious knowledge to manipulate Kuwait residents, requiring cultural sensitivity in analysis and response.

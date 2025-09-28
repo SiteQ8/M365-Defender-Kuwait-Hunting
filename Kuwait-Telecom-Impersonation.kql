@@ -1,0 +1,471 @@
+# Kuwait Telecom and Communication Provider Targeting
+
+## Overview
+Advanced hunting queries to detect impersonation attacks targeting Kuwait's telecommunications providers and communication services.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Kuwait Telecom Provider Impersonation
+
+### Major Kuwait Telecom Providers Monitoring
+**Description**: Monitors for impersonation of Kuwait's main telecommunications companies
+
+```kql
+// Kuwait Telecommunications Provider Impersonation Detection
+let KuwaitTelecomProviders = pack_array(
+    // Mobile operators
+    "zain.com", "zain.com.kw",           // Zain Kuwait
+    "ooredoo.com.kw",                    // Ooredoo Kuwait
+    "viva.com.kw",                       // VIVA Kuwait (STC)
+    "stc.com.kw",                        // STC Kuwait
+    // Internet and fixed-line providers
+    "qualitynet.net",                    // Qualitynet
+    "gulfnet.com.kw",                    // Gulfnet
+    "fasttelco.com.kw",                  // FastTelco
+    "zajil.net",                         // Zajil Telecom
+    "moc.gov.kw"                         // Ministry of Communications (regulator)
+);
+let TelecomTerms = pack_array(
+    "bill", "فاتورة", "payment", "دفع", "subscription", "اشتراك",
+    "mobile", "موبايل", "internet", "إنترنت", "data", "بيانات",
+    "upgrade", "ترقية", "package", "باقة", "roaming", "تجوال",
+    "balance", "رصيد", "recharge", "شحن", "line rental", "إيجار الخط",
+    "fiber", "فايبر", "broadband", "النطاق العريض", "wifi", "واي فاي"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where SenderDisplayName has_any ("zain", "ooredoo", "viva", "stc", "qualitynet", "gulfnet") 
+    or Subject has_any (TelecomTerms)
+    or Body has_any (TelecomTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain in (KuwaitTelecomProviders))  // Focus on impersonation attempts
+| extend 
+    ImpersonatedProvider = case(
+        SenderDisplayName contains "zain" and not(SenderDomain has "zain"), "Zain Kuwait impersonation",
+        SenderDisplayName contains "ooredoo" and not(SenderDomain == "ooredoo.com.kw"), "Ooredoo Kuwait impersonation",
+        SenderDisplayName contains "viva" and not(SenderDomain == "viva.com.kw"), "VIVA Kuwait impersonation",
+        SenderDisplayName contains "stc" and not(SenderDomain == "stc.com.kw"), "STC Kuwait impersonation",
+        SenderDisplayName contains "qualitynet" and not(SenderDomain == "qualitynet.net"), "Qualitynet impersonation",
+        SenderDisplayName contains "gulfnet" and not(SenderDomain == "gulfnet.com.kw"), "Gulfnet impersonation",
+        "General telecom impersonation"
+    ),
+    FraudType = case(
+        Subject has_any ("urgent", "suspend", "عاجل", "إيقاف", "تعليق"), "Critical - Account suspension fraud",
+        Subject has_any ("payment due", "overdue", "استحقاق", "متأخر"), "High - Payment fraud",
+        Subject has_any ("upgrade offer", "special deal", "عرض خاص", "ترقية"), "Medium - Fake upgrade offer",
+        Subject has_any ("prize", "winner", "جائزة", "فائز"), "Medium - Prize scam",
+        Subject has_any ("verify", "confirm", "تحقق", "تأكيد"), "High - Account verification scam",
+        "Low - General telecom fraud"
+    ),
+    ServiceType = case(
+        Subject has_any ("mobile", "موبايل", "line", "خط"), "Mobile Services",
+        Subject has_any ("internet", "إنترنت", "broadband", "فايبر"), "Internet Services", 
+        Subject has_any ("data", "بيانات"), "Data Services",
+        Subject has_any ("roaming", "تجوال"), "Roaming Services",
+        "General Telecom Services"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    SenderDisplayName,
+    RecipientEmailAddress,
+    Subject,
+    ImpersonatedProvider,
+    FraudType,
+    ServiceType,
+    ThreatTypes,
+    UrlCount,
+    AttachmentCount
+| order by Timestamp desc
+```
+
+---
+
+## Mobile Service Targeting
+
+### Kuwait Mobile Network Fraud Detection
+**Description**: Detects fraud specifically targeting Kuwait mobile network subscribers
+
+```kql
+// Kuwait Mobile Network Subscriber Targeting
+let MobileTerms = pack_array(
+    "mobile number", "رقم الموبايل", "phone line", "خط الهاتف",
+    "SIM card", "شريحة", "mobile subscription", "اشتراك الموبايل",
+    "call history", "سجل المكالمات", "SMS", "رسائل نصية", "MMS", "رسائل وسائط",
+    "mobile app", "تطبيق الموبايل", "my account", "حسابي", "self service", "الخدمة الذاتية"
+);
+let KuwaitMobileNumbers = pack_array(
+    "965", "+965",                       // Kuwait country code
+    "5", "6", "9"                       // Kuwait mobile prefixes
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (MobileTerms) or Body has_any (MobileTerms)
+| extend 
+    KuwaitMobilePattern = extract_all(@"(?:\+965|965)?\s*([569]\d{7})", Body),
+    MobileScamType = case(
+        Subject has_any ("SIM swap", "تبديل الشريحة"), "Critical - SIM swap attack",
+        Subject has_any ("number change", "تغيير الرقم"), "High - Number porting fraud",
+        Subject has_any ("unlock", "فتح", "code"), "Medium - Device unlock scam",
+        Subject has_any ("app install", "تحميل التطبيق"), "Medium - Malicious app",
+        Subject has_any ("roaming charges", "رسوم التجوال"), "Low - Roaming scam",
+        "General mobile fraud"
+    ),
+    TargetedNetwork = case(
+        Body contains "50" or Body contains "55" or Body contains "59", "Zain Kuwait",
+        Body contains "60" or Body contains "65" or Body contains "66", "Ooredoo Kuwait",
+        Body contains "51" or Body contains "56", "VIVA Kuwait", 
+        Body contains "90" or Body contains "94" or Body contains "97", "Zain Kuwait (Legacy)",
+        "Unknown Network"
+    )
+| where array_length(KuwaitMobilePattern) > 0 or MobileScamType != "General mobile fraud"
+| extend 
+    MobileCount = array_length(KuwaitMobilePattern),
+    RiskLevel = case(
+        MobileScamType == "Critical - SIM swap attack", "Critical",
+        MobileScamType == "High - Number porting fraud", "High",
+        MobileCount > 5, "High - Bulk targeting",
+        MobileCount > 1, "Medium - Multiple targets",
+        "Low - Single target"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MobileScamType,
+    TargetedNetwork,
+    MobileCount,
+    RiskLevel,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Internet Service Provider Targeting
+
+### Kuwait ISP and Broadband Fraud Detection
+**Description**: Detects targeting of Kuwait internet service providers and broadband customers
+
+```kql
+// Kuwait ISP and Broadband Service Targeting
+let ISPTerms = pack_array(
+    "internet service", "خدمة الإنترنت", "broadband", "النطاق العريض",
+    "fiber optic", "الألياف البصرية", "ADSL", "cable internet", "إنترنت الكيبل",
+    "speed test", "اختبار السرعة", "bandwidth", "عرض النطاق", 
+    "router", "الراوتر", "modem", "المودم", "wifi password", "كلمة مرور الواي فاي",
+    "IP address", "عنوان IP", "DNS", "network", "الشبكة"
+);
+let KuwaitISPs = pack_array(
+    "qualitynet.net", "gulfnet.com.kw", "fasttelco.com.kw", "zajil.net",
+    "kems.net", "newworld.com.kw", "link.net.kw"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (ISPTerms) or Body has_any (ISPTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| extend IsLegitimateISP = SenderDomain in (KuwaitISPs)
+| extend 
+    ISPService = case(
+        Subject has_any ("fiber", "الألياف"), "Fiber Optic",
+        Subject has_any ("ADSL", "broadband", "النطاق العريض"), "ADSL/Broadband",
+        Subject has_any ("wifi", "واي فاي", "wireless"), "Wireless Services",
+        Subject has_any ("dedicated", "مخصص"), "Dedicated Internet",
+        "General Internet Services"
+    ),
+    InternetScam = case(
+        Subject has_any ("speed upgrade", "ترقية السرعة") and not(IsLegitimateISP), "High - Fake speed upgrade",
+        Subject has_any ("router replacement", "استبدال الراوتر"), "Medium - Equipment scam",
+        Subject has_any ("free wifi", "واي فاي مجاني"), "Medium - Free WiFi scam", 
+        Subject has_any ("network maintenance", "صيانة الشبكة"), "Low - Fake maintenance",
+        Subject has_any ("bill increase", "زيادة الفاتورة"), "Low - Bill notification scam",
+        "General ISP targeting"
+    ),
+    TechnicalThreat = case(
+        Subject has_any ("DNS change", "تغيير DNS"), "Critical - DNS hijacking attempt",
+        Subject has_any ("router config", "إعدادات الراوتر"), "High - Router compromise",
+        Subject has_any ("IP change", "تغيير عنوان IP"), "Medium - IP manipulation",
+        "Low - General technical targeting"
+    )
+| where InternetScam != "General ISP targeting" or TechnicalThreat != "Low - General technical targeting"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    ISPService,
+    InternetScam,
+    TechnicalThreat,
+    IsLegitimateISP,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Communication Apps and Services
+
+### Local Communication Platform Targeting
+**Description**: Detects targeting of communication apps and services popular in Kuwait
+
+```kql
+// Kuwait Communication Apps and Digital Services Targeting
+let CommunicationApps = pack_array(
+    "whatsapp", "واتساب", "telegram", "تليجرام", "instagram", "انستغرام",
+    "snapchat", "سناب شات", "tiktok", "تيك توك", "twitter", "تويتر",
+    "facebook", "فيسبوك", "youtube", "يوتيوب", "zoom", "teams", "تيمز"
+);
+let KuwaitSpecificApps = pack_array(
+    "talabat", "طلبات", "carriage", "كاريج", "mybooking", "حجوزاتي",
+    "4sale", "فور سيل", "kuwait finder", "دليل الكويت", "q8car", "كيو8 كار"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (CommunicationApps) or Subject has_any (KuwaitSpecificApps)
+    or Body has_any (CommunicationApps) or Body has_any (KuwaitSpecificApps)
+| extend 
+    AppCategory = case(
+        Subject has_any ("whatsapp", "واتساب"), "WhatsApp",
+        Subject has_any ("telegram", "تليجرام"), "Telegram",
+        Subject has_any ("instagram", "انستغرام"), "Instagram", 
+        Subject has_any ("snapchat", "سناب شات"), "Snapchat",
+        Subject has_any ("tiktok", "تيك توك"), "TikTok",
+        Subject has_any ("talabat", "طلبات"), "Talabat (Food Delivery)",
+        Subject has_any ("carriage", "كاريج"), "Carriage (Transport)",
+        Subject has_any ("4sale", "فور سيل"), "4Sale (Marketplace)",
+        "Other Communication App"
+    ),
+    SocialEngineering = case(
+        Subject has_any ("account suspended", "الحساب معلق"), "Critical - Account suspension",
+        Subject has_any ("verify account", "تحقق من الحساب"), "High - Account verification scam",
+        Subject has_any ("prize winner", "فائز بجائزة"), "High - Prize scam",
+        Subject has_any ("friend request", "طلب صداقة"), "Medium - Social engineering",
+        Subject has_any ("message waiting", "رسالة في الانتظار"), "Medium - Message scam",
+        "Low - General app targeting"
+    ),
+    KuwaitContext = case(
+        Subject has_any ("kuwait", "الكويت"), "Kuwait-specific targeting",
+        Subject has_any ("kwd", "دينار"), "Kuwait currency mentioned",
+        Subject has_any ("talabat", "carriage", "طلبات", "كاريج"), "Kuwait app targeting",
+        "General app targeting"
+    )
+| where SocialEngineering != "Low - General app targeting"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    AppCategory,
+    SocialEngineering,
+    KuwaitContext,
+    ThreatTypes,
+    UrlCount
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Ministry of Communications Impersonation
+
+### MOC and Telecommunications Regulation Targeting
+**Description**: Detects impersonation of Kuwait's Ministry of Communications and telecom regulatory activities
+
+```kql
+// Ministry of Communications and Telecommunications Regulation Targeting
+let MOCTerms = pack_array(
+    "ministry of communications", "وزارة المواصلات", "MOC", "telecom regulation",
+    "CITRA", "الهيئة العامة للاتصالات", "telecommunications authority", "هيئة الاتصالات",
+    "spectrum license", "ترخيص الطيف", "frequency allocation", "تخصيص الترددات",
+    "telecom license", "ترخيص الاتصالات", "operator license", "ترخيص المشغل",
+    "digital kuwait", "الكويت الرقمية", "5G", "fiber network", "شبكة الألياف"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (MOCTerms) or Body has_any (MOCTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain == "moc.gov.kw")  // Focus on non-MOC communications
+| extend 
+    RegulatoryType = case(
+        Subject has_any ("license", "ترخيص"), "Licensing Issues",
+        Subject has_any ("spectrum", "الطيف", "frequency", "تردد"), "Spectrum Management",
+        Subject has_any ("violation", "مخالفة"), "Regulatory Violations",
+        Subject has_any ("5G", "fiber", "الألياف"), "Infrastructure Development",
+        Subject has_any ("digital kuwait", "الكويت الرقمية"), "Digital Transformation",
+        "General Telecommunications Regulation"
+    ),
+    RegulatoryThreat = case(
+        Subject has_any ("license revoked", "إلغاء الترخيص"), "Critical - License revocation",
+        Subject has_any ("fine", "penalty", "غرامة", "عقوبة"), "High - Regulatory penalty",
+        Subject has_any ("compliance failure", "فشل في الامتثال"), "High - Compliance threat",
+        Subject has_any ("spectrum interference", "تداخل الطيف"), "Medium - Technical violation",
+        "Low - General regulatory communication"
+    ),
+    IndustryImpact = case(
+        RegulatoryType == "Licensing Issues", "Critical - Business operations",
+        RegulatoryType == "Spectrum Management", "High - Technical operations",
+        RegulatoryType == "Regulatory Violations", "High - Legal implications",
+        "Medium - General impact"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    RegulatoryType,
+    RegulatoryThreat,
+    IndustryImpact,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Telecom Infrastructure Targeting
+
+### Critical Telecom Infrastructure Threats
+**Description**: Detects targeting of Kuwait's critical telecommunications infrastructure
+
+```kql
+// Kuwait Critical Telecommunications Infrastructure Targeting
+let InfrastructureTerms = pack_array(
+    "fiber cable", "كيبل الألياف", "submarine cable", "الكيبل البحري",
+    "data center", "مركز البيانات", "NOC", "مركز العمليات", "network operations",
+    "base station", "المحطة الأساسية", "cell tower", "برج الخلوي",
+    "satellite", "القمر الصناعي", "microwave", "الميكروويف",
+    "switching center", "مركز التحويل", "gateway", "البوابة", "backbone", "الشبكة الأساسية"
+);
+let CriticalFacilities = pack_array(
+    "shuwaikh", "الشويخ", "salmiya", "السالمية", "kuwait towers", "أبراج الكويت",
+    "sabah al salem", "صباح السالم", "ministry of communications", "وزارة المواصلات"
+);
+EmailEvents
+| where Timestamp > ago(7d)
+| where Subject has_any (InfrastructureTerms) or Body has_any (InfrastructureTerms)
+| where Subject has_any (CriticalFacilities) or Body has_any (CriticalFacilities)
+| extend 
+    InfrastructureType = case(
+        Subject has_any ("fiber", "الألياف"), "Fiber Infrastructure",
+        Subject has_any ("data center", "مركز البيانات"), "Data Centers",
+        Subject has_any ("satellite", "القمر الصناعي"), "Satellite Communications", 
+        Subject has_any ("base station", "cell tower", "المحطة", "برج"), "Mobile Infrastructure",
+        Subject has_any ("submarine", "البحري"), "Submarine Cables",
+        "General Infrastructure"
+    ),
+    ThreatLevel = case(
+        Subject has_any ("attack", "هجوم", "damage", "ضرر"), "Critical - Infrastructure attack",
+        Subject has_any ("outage", "انقطاع", "failure", "فشل"), "High - Service disruption",
+        Subject has_any ("maintenance", "صيانة", "upgrade", "ترقية"), "Medium - Maintenance scam",
+        Subject has_any ("inspection", "معاينة"), "Low - Inspection notice",
+        "Low - General infrastructure communication"
+    ),
+    GeographicArea = case(
+        Subject has_any ("shuwaikh", "الشويخ"), "Shuwaikh Industrial Area",
+        Subject has_any ("salmiya", "السالمية"), "Salmiya",
+        Subject has_any ("sabah al salem", "صباح السالم"), "Sabah Al Salem",
+        "Other Kuwait Area"
+    )
+| where ThreatLevel != "Low - General infrastructure communication"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    InfrastructureType,
+    ThreatLevel,
+    GeographicArea,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Combined Telecom Threat Analysis
+
+### Comprehensive Kuwait Telecom Targeting Summary
+**Description**: Provides comprehensive analysis of all telecom-related threats in Kuwait
+
+```kql
+// Comprehensive Kuwait Telecommunications Targeting Analysis
+let AllTelecomIndicators = pack_array(
+    // Providers
+    "zain", "ooredoo", "viva", "stc", "qualitynet", "gulfnet", "fasttelco",
+    // Services  
+    "mobile", "internet", "fiber", "broadband", "موبايل", "إنترنت", "فايبر",
+    // Regulatory
+    "MOC", "CITRA", "وزارة المواصلات", "الاتصالات",
+    // Infrastructure
+    "data center", "مركز البيانات", "network", "شبكة"
+);
+EmailEvents
+| where Timestamp > ago(7d)
+| where Subject has_any (AllTelecomIndicators) or Body has_any (AllTelecomIndicators)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| extend 
+    TelecomCategory = case(
+        Subject has_any ("zain", "ooredoo", "viva", "stc"), "Mobile Operators",
+        Subject has_any ("qualitynet", "gulfnet", "fasttelco"), "ISP Providers",
+        Subject has_any ("MOC", "CITRA", "وزارة المواصلات"), "Regulatory Bodies", 
+        Subject has_any ("infrastructure", "data center", "مركز البيانات"), "Infrastructure",
+        "General Telecom"
+    ),
+    AttackVector = case(
+        Subject has_any ("suspend", "إيقاف") or Body has_any ("suspend", "إيقاف"), "Service suspension threats",
+        Subject has_any ("verify", "تحقق") or Body has_any ("verify", "تحقق"), "Account verification scams",
+        Subject has_any ("upgrade", "ترقية") or Body has_any ("upgrade", "ترقية"), "Fake upgrade offers",
+        Subject has_any ("bill", "فاتورة") or Body has_any ("bill", "فاتورة"), "Billing fraud",
+        "Other attack vectors"
+    ),
+    IsLegitimateSource = case(
+        SenderDomain in ("zain.com", "ooredoo.com.kw", "viva.com.kw", "stc.com.kw"), "Legitimate Mobile",
+        SenderDomain in ("qualitynet.net", "gulfnet.com.kw", "fasttelco.com.kw"), "Legitimate ISP",
+        SenderDomain == "moc.gov.kw", "Legitimate Government",
+        "Suspicious Source"
+    )
+| where IsLegitimateSource == "Suspicious Source"
+| summarize 
+    ThreatCount = count(),
+    UniqueRecipients = dcount(RecipientEmailAddress),
+    AttackVectors = make_set(AttackVector),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by TelecomCategory, SenderFromAddress
+| extend 
+    RiskScore = case(
+        TelecomCategory == "Regulatory Bodies", ThreatCount * 4,
+        TelecomCategory == "Mobile Operators", ThreatCount * 3,
+        TelecomCategory == "Infrastructure", ThreatCount * 3,
+        ThreatCount * 2
+    )
+| order by RiskScore desc, LastSeen desc
+```
+
+---
+
+## Usage Guidelines
+
+### Priority Deployment
+1. **Mobile Operators** - Deploy first for immediate phishing protection
+2. **ISP Targeting** - Important for business internet services
+3. **MOC Impersonation** - Critical for regulatory compliance
+4. **Infrastructure Threats** - For critical infrastructure protection
+
+### Customization Tips
+- Update telecom provider lists with current market players
+- Adjust mobile number patterns for new number ranges
+- Modify Arabic terms based on local telecommunications terminology
+- Add seasonal patterns for service renewal periods
+
+### Integration Recommendations
+- Create high-priority alerts for MOC impersonation
+- Forward infrastructure threats to national CERT
+- Generate daily reports during major service outages
+- Share mobile fraud patterns with telecom security teams
+
+---
+
+**Industry Note**: These queries help protect against telecom-specific fraud patterns that are commonly used to target Kuwait residents and businesses, including SIM swap attacks, billing fraud, and infrastructure targeting.

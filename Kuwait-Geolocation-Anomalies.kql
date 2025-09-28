@@ -1,0 +1,481 @@
+# Kuwait Geolocation and IP Address Anomaly Detection
+
+## Overview
+Advanced hunting queries to detect suspicious activities based on geographic location, IP address analysis, and Kuwait-specific network patterns.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Kuwait IP Range Analysis
+
+### Kuwait IP Address Range Monitoring
+**Description**: Monitors authentication and activities from Kuwait vs foreign IP addresses
+
+```kql
+// Kuwait IP Range Analysis and Geographic Anomaly Detection
+let KuwaitIPRanges = pack_array(
+    "77.244.0.0/14",                 // Kuwait Telecommunications Company (STC) 
+    "91.74.128.0/17",                // Zain Kuwait
+    "185.106.120.0/22",              // Ooredoo Kuwait
+    "37.36.0.0/14",                  // Qualitynet General Trading & Contracting Co.
+    "195.229.240.0/20",              // FastTelco
+    "91.213.8.0/21",                 // Gulfnet Communications
+    "146.185.0.0/16",                // Various Kuwait ISPs
+    "212.71.64.0/19"                 // Kuwait Government Networks
+);
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where ResultType == 0  // Successful sign-ins only
+| extend 
+    IsKuwaitIP = case(
+        ipv4_is_in_range(IPAddress, "77.244.0.0/14"), "STC Kuwait",
+        ipv4_is_in_range(IPAddress, "91.74.128.0/17"), "Zain Kuwait",
+        ipv4_is_in_range(IPAddress, "185.106.120.0/22"), "Ooredoo Kuwait", 
+        ipv4_is_in_range(IPAddress, "37.36.0.0/14"), "Qualitynet",
+        ipv4_is_in_range(IPAddress, "195.229.240.0/20"), "FastTelco",
+        ipv4_is_in_range(IPAddress, "91.213.8.0/21"), "Gulfnet",
+        ipv4_is_in_range(IPAddress, "146.185.0.0/16"), "Kuwait ISP",
+        ipv4_is_in_range(IPAddress, "212.71.64.0/19"), "Kuwait Government",
+        "Non-Kuwait IP"
+    ),
+    LocationRisk = case(
+        Location in ("Kuwait", "KW") and IsKuwaitIP != "Non-Kuwait IP", "Normal - Kuwait location and IP",
+        Location in ("Kuwait", "KW") and IsKuwaitIP == "Non-Kuwait IP", "Medium - Kuwait location, foreign IP",
+        Location !in ("Kuwait", "KW") and IsKuwaitIP != "Non-Kuwait IP", "High - Foreign location, Kuwait IP", 
+        Location !in ("Kuwait", "KW") and IsKuwaitIP == "Non-Kuwait IP", "Critical - Foreign location and IP",
+        "Unknown"
+    ),
+    IsBusinessHours = datetime_part("hour", TimeGenerated) between (8 .. 17) and 
+                     dayofweek(TimeGenerated) in (0d, 1d, 2d, 3d, 4d)  // Sunday to Thursday
+| where IsKuwaitIP == "Non-Kuwait IP" or LocationRisk contains "High" or LocationRisk contains "Critical"
+| extend 
+    RiskScore = case(
+        LocationRisk == "Critical - Foreign location and IP", 10,
+        LocationRisk == "High - Foreign location, Kuwait IP", 8,
+        LocationRisk == "Medium - Kuwait location, foreign IP", 5,
+        3
+    ),
+    BusinessHoursAnomaly = case(
+        not(IsBusinessHours) and LocationRisk contains "Critical", "After hours foreign access",
+        not(IsBusinessHours) and LocationRisk contains "High", "After hours suspicious access",
+        "Normal hours"
+    )
+| summarize 
+    LoginCount = count(),
+    UniqueApps = dcount(AppDisplayName),
+    Countries = make_set(Location),
+    RiskLevels = make_set(LocationRisk),
+    MaxRiskScore = max(RiskScore),
+    FirstLogin = min(TimeGenerated),
+    LastLogin = max(TimeGenerated)
+    by UserPrincipalName, IPAddress, IsKuwaitIP
+| where LoginCount > 3 or MaxRiskScore >= 8  // Focus on repeated or high-risk access
+| order by MaxRiskScore desc, LoginCount desc
+```
+
+---
+
+## Kuwait Business Hours Anomaly Detection
+
+### Kuwait Working Hours and Weekend Analysis
+**Description**: Detects activities outside Kuwait business hours and weekends
+
+```kql
+// Kuwait Business Hours and Weekend Activity Anomaly Detection
+let KuwaitBusinessHours = pack_array(8, 9, 10, 11, 12, 13, 14, 15, 16, 17);  // 8 AM to 5 PM
+let KuwaitWeekdays = pack_array(0d, 1d, 2d, 3d, 4d);  // Sunday through Thursday
+CloudAppEvents
+| where Timestamp > ago(24h)
+| where Application in ("Microsoft SharePoint Online", "OneDrive for Business", "Microsoft Exchange Online")
+| where ActionType in ("FileDownloaded", "FileUploaded", "MailItemsAccessed", "Send", "FileModified")
+| extend 
+    KuwaitTime = Timestamp + 3h,  // Convert UTC to Kuwait time (UTC+3)
+    Hour = datetime_part("hour", KuwaitTime),
+    DayOfWeek = dayofweek(KuwaitTime),
+    IsBusinessHours = Hour in (KuwaitBusinessHours) and DayOfWeek in (KuwaitWeekdays),
+    IsFromKuwaitIP = case(
+        ipv4_is_in_range(IPAddress, "77.244.0.0/14"), true,   // STC Kuwait
+        ipv4_is_in_range(IPAddress, "91.74.128.0/17"), true,  // Zain Kuwait
+        ipv4_is_in_range(IPAddress, "185.106.120.0/22"), true, // Ooredoo Kuwait
+        ipv4_is_in_range(IPAddress, "37.36.0.0/14"), true,    // Qualitynet
+        ipv4_is_in_range(IPAddress, "195.229.240.0/20"), true, // FastTelco
+        false
+    )
+| where not(IsBusinessHours)  // Focus on after-hours activity
+| extend 
+    TimeCategory = case(
+        Hour between (18 .. 23), "Evening (6 PM - 11 PM)", 
+        Hour between (0 .. 7), "Night/Early Morning (12 AM - 7 AM)",
+        DayOfWeek in (5d, 6d), "Weekend (Friday/Saturday)",
+        "Other After Hours"
+    ),
+    ActivityRisk = case(
+        ActionType == "FileDownloaded" and Hour between (0 .. 5), "Critical - Night file downloads",
+        ActionType == "MailItemsAccessed" and not(IsFromKuwaitIP), "Critical - Foreign after-hours email access",
+        ActionType in ("FileUploaded", "Send") and DayOfWeek in (5d, 6d), "High - Weekend data uploads/sends",
+        ActionType == "FileModified" and Hour between (22 .. 6), "High - Late night file modifications",
+        "Medium - General after-hours activity"
+    ),
+    SensitiveFileTypes = case(
+        ObjectName has_any (".xlsx", ".docx", ".pdf"), "Office Documents",
+        ObjectName has_any (".zip", ".rar", ".7z"), "Archive Files",
+        ObjectName has_any (".csv", ".txt"), "Data Files",
+        "Other Files"
+    )
+| where ActivityRisk contains "Critical" or ActivityRisk contains "High"
+| project 
+    Timestamp,
+    KuwaitTime,
+    AccountDisplayName,
+    Application,
+    ActionType,
+    ObjectName,
+    TimeCategory,
+    ActivityRisk,
+    SensitiveFileTypes,
+    IsFromKuwaitIP,
+    IPAddress,
+    UserAgent
+| order by Timestamp desc
+```
+
+---
+
+## Geographic Location Analysis
+
+### Suspicious Geographic Patterns Detection
+**Description**: Analyzes geographic location patterns for suspicious travel and access
+
+```kql
+// Geographic Location and Travel Pattern Analysis
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where ResultType == 0  // Successful logins
+| extend 
+    IsKuwaitLocation = Location in ("Kuwait", "KW", "Kuwait City"),
+    IsGCCLocation = Location in ("Saudi Arabia", "UAE", "United Arab Emirates", "Qatar", "Bahrain", "Oman"),
+    IsMiddleEastLocation = Location in ("Jordan", "Lebanon", "Iraq", "Iran", "Turkey", "Egypt", "Syria")
+| project TimeGenerated, UserPrincipalName, IPAddress, Location, IsKuwaitLocation, IsGCCLocation, IsMiddleEastLocation, AppDisplayName
+| sort by UserPrincipalName, TimeGenerated
+| extend 
+    PrevLocation = prev(Location, 1),
+    PrevTime = prev(TimeGenerated, 1),
+    PrevUser = prev(UserPrincipalName, 1)
+| where UserPrincipalName == PrevUser  // Same user
+| extend TimeDifference = datetime_diff('hour', TimeGenerated, PrevTime)
+| where Location != PrevLocation and TimeDifference <= 12  // Location change within 12 hours
+| extend 
+    TravelPattern = case(
+        IsKuwaitLocation and not(prev(IsKuwaitLocation, 1)), "Return to Kuwait",
+        not(IsKuwaitLocation) and prev(IsKuwaitLocation, 1), "Travel from Kuwait",
+        not(IsKuwaitLocation) and not(prev(IsKuwaitLocation, 1)), "International travel",
+        "Domestic movement"
+    ),
+    SuspiciousTravel = case(
+        TimeDifference <= 2 and Location != PrevLocation, "Critical - Impossible travel time",
+        not(IsKuwaitLocation) and not(IsGCCLocation) and not(IsMiddleEastLocation), "High - Distant geographic location",
+        not(IsKuwaitLocation) and prev(IsKuwaitLocation, 1) and TimeDifference <= 6, "High - Fast international travel",
+        not(IsGCCLocation) and prev(IsGCCLocation, 1) and TimeDifference <= 4, "Medium - Regional travel",
+        "Low - Normal travel pattern"
+    ),
+    GeographicRisk = case(
+        Location in ("China", "Russia", "North Korea", "Iran"), "Critical - High-risk country",
+        Location in ("Unknown", "Anonymous Proxy", "Satellite Provider"), "High - Anonymous/Proxy access",
+        not(IsKuwaitLocation) and not(IsGCCLocation), "Medium - Non-regional access",
+        "Low - Regional access"
+    )
+| where SuspiciousTravel != "Low - Normal travel pattern" or GeographicRisk != "Low - Regional access"
+| project 
+    TimeGenerated,
+    UserPrincipalName,
+    CurrentLocation = Location,
+    PreviousLocation = PrevLocation,
+    TimeDifference,
+    TravelPattern,
+    SuspiciousTravel,
+    GeographicRisk,
+    IPAddress,
+    AppDisplayName
+| order by TimeGenerated desc
+```
+
+---
+
+## VPN and Proxy Detection
+
+### VPN and Anonymous Proxy Usage Detection
+**Description**: Detects VPN and proxy usage patterns in Kuwait context
+
+```kql
+// VPN and Anonymous Proxy Detection for Kuwait Users
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where ResultType == 0
+| extend 
+    IsAnonymousProxy = NetworkLocationDetails has "Anonymous Proxy" or 
+                      NetworkLocationDetails has "Satellite Provider" or
+                      NetworkLocationDetails has "VPN",
+    IsKnownVPNProvider = IPAddress has_any (
+        "NordVPN", "ExpressVPN", "Surfshark", "CyberGhost", "Private Internet Access",
+        "ProtonVPN", "Windscribe", "TunnelBear", "IPVanish", "PureVPN"
+    ),
+    LocationMismatch = case(
+        Location == "Kuwait" and not(ipv4_is_in_range(IPAddress, "77.244.0.0/14")) and 
+        not(ipv4_is_in_range(IPAddress, "91.74.128.0/17")) and
+        not(ipv4_is_in_range(IPAddress, "185.106.120.0/22")), "Kuwait location with non-Kuwait IP",
+        Location != "Kuwait" and (ipv4_is_in_range(IPAddress, "77.244.0.0/14") or
+        ipv4_is_in_range(IPAddress, "91.74.128.0/17")), "Non-Kuwait location with Kuwait IP",
+        "No mismatch"
+    )
+| where IsAnonymousProxy or IsKnownVPNProvider or LocationMismatch != "No mismatch"
+| extend 
+    VPNRisk = case(
+        IsKnownVPNProvider and Location in ("China", "Russia", "Iran", "North Korea"), "Critical - VPN from high-risk country",
+        IsAnonymousProxy and UserPrincipalName has_any ("admin", "service", "system"), "Critical - Admin account via proxy",
+        LocationMismatch == "Kuwait location with non-Kuwait IP", "High - Location spoofing attempt",
+        LocationMismatch == "Non-Kuwait location with Kuwait IP", "High - IP tunneling detected",
+        IsKnownVPNProvider, "Medium - Known VPN usage",
+        IsAnonymousProxy, "Medium - Anonymous proxy usage",
+        "Low - Suspicious network pattern"
+    ),
+    KuwaitContext = case(
+        UserPrincipalName endswith ".kw" or UserPrincipalName contains "kuwait", "Kuwait-based user",
+        AppDisplayName has_any ("gov", "bank", "finance"), "Sensitive application access",
+        "Regular user"
+    )
+| summarize 
+    AccessCount = count(),
+    UniqueApps = dcount(AppDisplayName),
+    Countries = make_set(Location),
+    VPNTypes = make_set(VPNRisk),
+    FirstAccess = min(TimeGenerated),
+    LastAccess = max(TimeGenerated)
+    by UserPrincipalName, IPAddress, KuwaitContext
+| extend AccessDuration = datetime_diff('hour', LastAccess, FirstAccess)
+| where AccessCount > 5 or VPNTypes has_any ("Critical", "High")  // Focus on repeated or high-risk VPN usage
+| order by AccessCount desc
+```
+
+---
+
+## Kuwait ISP and Network Analysis
+
+### Kuwait Internet Service Provider Analysis
+**Description**: Analyzes access patterns by Kuwait ISP and detects anomalies
+
+```kql
+// Kuwait ISP and Network Provider Analysis
+let KuwaitISPMapping = datatable(IPRange:string, ISP:string, Type:string)
+[
+    "77.244.0.0/14", "STC Kuwait", "Mobile/Fixed",
+    "91.74.128.0/17", "Zain Kuwait", "Mobile/Fixed", 
+    "185.106.120.0/22", "Ooredoo Kuwait", "Mobile/Fixed",
+    "37.36.0.0/14", "Qualitynet", "Business ISP",
+    "195.229.240.0/20", "FastTelco", "Business ISP",
+    "91.213.8.0/21", "Gulfnet", "Business ISP",
+    "146.185.0.0/16", "Various Kuwait ISPs", "Mixed",
+    "212.71.64.0/19", "Kuwait Government", "Government"
+];
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where ResultType == 0
+| extend 
+    KuwaitISP = case(
+        ipv4_is_in_range(IPAddress, "77.244.0.0/14"), "STC Kuwait",
+        ipv4_is_in_range(IPAddress, "91.74.128.0/17"), "Zain Kuwait",
+        ipv4_is_in_range(IPAddress, "185.106.120.0/22"), "Ooredoo Kuwait",
+        ipv4_is_in_range(IPAddress, "37.36.0.0/14"), "Qualitynet",
+        ipv4_is_in_range(IPAddress, "195.229.240.0/20"), "FastTelco",
+        ipv4_is_in_range(IPAddress, "91.213.8.0/21"), "Gulfnet",
+        ipv4_is_in_range(IPAddress, "146.185.0.0/16"), "Kuwait ISP",
+        ipv4_is_in_range(IPAddress, "212.71.64.0/19"), "Kuwait Government",
+        "Non-Kuwait ISP"
+    ),
+    NetworkType = case(
+        KuwaitISP in ("STC Kuwait", "Zain Kuwait", "Ooredoo Kuwait"), "Mobile/Consumer",
+        KuwaitISP in ("Qualitynet", "FastTelco", "Gulfnet"), "Business",
+        KuwaitISP == "Kuwait Government", "Government",
+        "Foreign/Unknown"
+    )
+| where KuwaitISP != "Non-Kuwait ISP"  // Focus on Kuwait ISP analysis
+| extend 
+    ISPAnomaly = case(
+        NetworkType == "Government" and not(UserPrincipalName has_any ("gov.kw", "ministry", "وزارة")), "Government IP, non-gov user",
+        NetworkType == "Business" and datetime_part("hour", TimeGenerated) !between (8 .. 17), "Business ISP after hours",
+        NetworkType == "Mobile/Consumer" and UserPrincipalName has_any ("admin", "service", "system"), "Consumer ISP, admin account",
+        "No anomaly"
+    ),
+    ISPSwitching = case(
+        // Check if user switches between different ISPs frequently
+        prev(KuwaitISP, 1) != KuwaitISP and prev(UserPrincipalName, 1) == UserPrincipalName, "ISP switching detected",
+        "Consistent ISP"
+    )
+| where ISPAnomaly != "No anomaly" or ISPSwitching == "ISP switching detected"
+| summarize 
+    AccessCount = count(),
+    ISPsUsed = dcount(KuwaitISP),
+    UniqueISPs = make_set(KuwaitISP),
+    Anomalies = make_set(ISPAnomaly),
+    FirstAccess = min(TimeGenerated),
+    LastAccess = max(TimeGenerated)
+    by UserPrincipalName, NetworkType
+| where ISPsUsed > 2 or Anomalies has_any ("Government IP, non-gov user", "Business ISP after hours")
+| order by ISPsUsed desc, AccessCount desc
+```
+
+---
+
+## Kuwait Regional Access Patterns
+
+### GCC and Regional Access Analysis
+**Description**: Analyzes access patterns from GCC countries and regional locations
+
+```kql
+// GCC and Middle East Regional Access Pattern Analysis
+let GCCCountries = pack_array("Saudi Arabia", "UAE", "United Arab Emirates", "Qatar", "Bahrain", "Oman");
+let MiddleEastCountries = pack_array("Jordan", "Lebanon", "Iraq", "Turkey", "Egypt", "Iran", "Syria", "Yemen");
+let BusinessPartnerCountries = pack_array("United Kingdom", "United States", "India", "Philippines", "Pakistan", "Bangladesh");
+SigninLogs
+| where TimeGenerated > ago(30d)
+| where ResultType == 0
+| where Location !in ("Kuwait", "KW")  // Focus on non-Kuwait access
+| extend 
+    RegionCategory = case(
+        Location in (GCCCountries), "GCC Countries",
+        Location in (MiddleEastCountries), "Middle East", 
+        Location in (BusinessPartnerCountries), "Business Partners",
+        Location in ("China", "Russia", "North Korea", "Iran"), "High-Risk Countries",
+        "Other Countries"
+    ),
+    AccessContext = case(
+        datetime_part("hour", TimeGenerated) between (8 .. 17), "Business Hours",
+        datetime_part("hour", TimeGenerated) between (18 .. 23), "Evening",
+        "Night/Early Morning"
+    ),
+    UserContext = case(
+        UserPrincipalName has_any ("admin", "service", "system"), "Administrative",
+        UserPrincipalName endswith ".kw", "Kuwait Domain User",
+        UserPrincipalName has_any ("contractor", "consultant", "vendor"), "External User",
+        "Regular User"
+    )
+| summarize 
+    AccessCount = count(),
+    UniqueCountries = dcount(Location),
+    Countries = make_set(Location),
+    Apps = make_set(AppDisplayName),
+    AccessTimes = make_set(AccessContext),
+    FirstAccess = min(TimeGenerated),
+    LastAccess = max(TimeGenerated)
+    by UserPrincipalName, RegionCategory, UserContext
+| extend 
+    RegionalRisk = case(
+        RegionCategory == "High-Risk Countries", "Critical",
+        RegionCategory == "Other Countries" and AccessCount > 50, "High - Frequent non-regional access",
+        RegionCategory == "Business Partners" and UserContext == "Administrative", "High - Admin from business partner country",
+        RegionCategory == "Middle East" and AccessCount > 100, "Medium - Frequent regional access",
+        RegionCategory == "GCC Countries", "Low - GCC regional access",
+        "Medium - International access"
+    ),
+    AccessPattern = case(
+        datetime_diff('day', LastAccess, FirstAccess) <= 1 and AccessCount > 20, "Intensive short-term access",
+        datetime_diff('day', LastAccess, FirstAccess) > 30 and AccessCount > 100, "Sustained long-term access",
+        UniqueCountries > 5, "Multi-country access pattern",
+        "Standard access pattern"
+    )
+| where RegionalRisk in ("Critical", "High - Frequent non-regional access", "High - Admin from business partner country")
+| order by AccessCount desc
+```
+
+---
+
+## Kuwait Time Zone and Holiday Analysis
+
+### Kuwait Time Zone Anomaly Detection
+**Description**: Detects activities during Kuwait national holidays and unusual time patterns
+
+```kql
+// Kuwait Time Zone and National Holiday Activity Analysis
+let KuwaitNationalHolidays2025 = pack_array(
+    datetime(2025-02-25), datetime(2025-02-26),  // National Day & Liberation Day
+    datetime(2025-06-19),                        // Independence Day  
+    datetime(2025-03-30), datetime(2025-03-31),  // Eid Al-Fitr (estimated)
+    datetime(2025-06-16), datetime(2025-06-17),  // Eid Al-Adha (estimated)
+    datetime(2025-07-07),                        // Arafat Day (estimated)
+    datetime(2025-07-28),                        // Islamic New Year (estimated)
+    datetime(2025-09-05)                         // Prophet's Birthday (estimated)
+);
+CloudAppEvents
+| where Timestamp > ago(7d)
+| where Application in ("Microsoft SharePoint Online", "OneDrive for Business", "Microsoft Exchange Online")
+| extend 
+    KuwaitTime = Timestamp + 3h,  // Convert to Kuwait time
+    KuwaitDate = todatetime(format_datetime(KuwaitTime, "yyyy-MM-dd")),
+    Hour = datetime_part("hour", KuwaitTime),
+    IsHoliday = KuwaitDate in (KuwaitNationalHolidays2025),
+    IsWeekend = dayofweek(KuwaitTime) in (5d, 6d),  // Friday, Saturday
+    IsAfterHours = Hour !between (8 .. 17),
+    IsFromKuwaitIP = case(
+        ipv4_is_in_range(IPAddress, "77.244.0.0/14") or
+        ipv4_is_in_range(IPAddress, "91.74.128.0/17") or  
+        ipv4_is_in_range(IPAddress, "185.106.120.0/22"), true,
+        false
+    )
+| where IsHoliday or (IsWeekend and IsAfterHours)
+| extend 
+    HolidayType = case(
+        KuwaitDate == datetime(2025-02-25) or KuwaitDate == datetime(2025-02-26), "National/Liberation Day",
+        KuwaitDate == datetime(2025-06-19), "Independence Day",
+        KuwaitDate in (datetime(2025-03-30), datetime(2025-03-31)), "Eid Al-Fitr",
+        KuwaitDate in (datetime(2025-06-16), datetime(2025-06-17)), "Eid Al-Adha", 
+        KuwaitDate == datetime(2025-07-07), "Arafat Day",
+        KuwaitDate == datetime(2025-07-28), "Islamic New Year",
+        KuwaitDate == datetime(2025-09-05), "Prophet's Birthday",
+        IsWeekend, "Weekend",
+        "Regular Day"
+    ),
+    ActivityRisk = case(
+        IsHoliday and ActionType in ("FileDownloaded", "FileUploaded") and not(IsFromKuwaitIP), "Critical - Holiday data access from abroad",
+        IsHoliday and ActionType == "Send" and Hour between (0 .. 6), "High - Holiday night email activity",
+        IsWeekend and ActionType == "FileModified" and not(IsFromKuwaitIP), "High - Weekend file changes from abroad",
+        IsHoliday and Hour between (8 .. 17), "Medium - Holiday business hours activity",
+        "Low - Normal holiday/weekend activity"
+    )
+| where ActivityRisk contains "Critical" or ActivityRisk contains "High"
+| summarize 
+    ActivityCount = count(),
+    UniqueUsers = dcount(AccountDisplayName),
+    Actions = make_set(ActionType),
+    FirstActivity = min(Timestamp),
+    LastActivity = max(Timestamp)
+    by HolidayType, ActivityRisk, IsFromKuwaitIP
+| order by ActivityCount desc
+```
+
+---
+
+## Usage Guidelines
+
+### Deployment Strategy
+1. **Start with IP range monitoring** - Immediate geographic anomaly detection
+2. **Add business hours analysis** - Detect after-hours suspicious activity  
+3. **Implement VPN detection** - Important for security policy enforcement
+4. **Deploy holiday monitoring** - Critical during national celebrations
+
+### Customization Notes
+- Update Kuwait IP ranges annually as ISPs expand networks
+- Adjust business hours based on organizational schedules (some work Saturday)
+- Add Ramadan working hours (typically shorter during fasting)
+- Include organization-specific VPN ranges in allow lists
+
+### Performance Considerations
+- Geographic queries can be resource-intensive for large datasets
+- Consider time-based sampling for historical analysis
+- Use IP range caching for better performance
+- Implement alerting thresholds to avoid alert fatigue
+
+---
+
+**Network Security Note**: These queries provide essential geographic and network-based security monitoring tailored to Kuwait's unique network infrastructure, business culture, and time zone considerations.
