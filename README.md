@@ -15,8 +15,7 @@
 
 **Ali AlEnezi**  
 🔒 Kuwait  
-🎓 SANS/GIAC Certified Security Professional  
-🏆 Kuwait IT Community Leader  
+🎓 SANS/GIAC Certified Security Professional 
 
 - 📧 Email: [site@hotmail.com](mailto:site@hotmail.com)
 - 💼 LinkedIn: [linkedin.com/in/alenizi](https://www.linkedin.com/in/alenizi/)
