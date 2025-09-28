@@ -1,0 +1,494 @@
+# Kuwait Banking and Financial Sector Threat Detection
+
+## Overview
+Advanced hunting queries specifically designed to detect threats targeting Kuwait's banking and financial sector. These queries monitor for impersonation attacks, financial fraud, and sector-specific threats.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Kuwait Banking Domain Monitoring
+
+### Kuwait Bank Domain Impersonation Detection
+**Description**: Monitors for phishing attempts impersonating Kuwait banks
+
+```kql
+// Kuwait Banking Domain Monitoring and Phishing Detection
+let KuwaitBanks = pack_array(
+    "nbk.com", "nbok.com",           // National Bank of Kuwait
+    "gulfbank.com.kw",               // Gulf Bank
+    "kfh.com",                       // Kuwait Finance House
+    "cbk.com.kw",                    // Commercial Bank of Kuwait  
+    "eahli.com",                     // Al Ahli Bank of Kuwait
+    "boubyan.com",                   // Boubyan Bank
+    "warbabank.com",                 // Warba Bank
+    "burgan.com.kw",                 // Burgan Bank
+    "kib.com.kw",                    // Kuwait International Bank
+    "abk.com.kw",                    // Al Ahli Bank of Kuwait
+    "cbk.gov.kw"                     // Central Bank of Kuwait (Regulator)
+);
+EmailUrlInfo
+| where Timestamp > ago(7d)
+| extend Domain = tostring(parse_url(Url).Host)
+| where Domain has_any (KuwaitBanks) or (Domain contains "bank" and Domain endswith ".kw")
+| join EmailEvents on NetworkMessageId
+| where DeliveryAction == "Delivered"
+| extend 
+    IsLegitimateBank = Domain in (KuwaitBanks),
+    SuspiciousIndicators = pack_array(
+        iff(not(Domain in (KuwaitBanks)) and Domain contains "bank", "Suspicious banking domain", ""),
+        iff(Subject has_any ("urgent", "verify", "suspend", "expire", "عاجل", "تحقق", "إيقاف"), "Urgent language", ""),
+        iff(SenderFromAddress !contains Domain, "Domain mismatch", ""),
+        iff(UrlCount > 5, "Multiple URLs", ""),
+        iff(Subject has_any ("click", "login", "update", "انقر", "تسجيل دخول"), "Action-oriented language", "")
+    )
+| mv-expand SuspiciousIndicator = SuspiciousIndicators
+| where isnotempty(SuspiciousIndicator)
+| extend 
+    BankName = case(
+        Domain contains "nbk", "National Bank of Kuwait",
+        Domain contains "gulf", "Gulf Bank", 
+        Domain contains "kfh", "Kuwait Finance House",
+        Domain contains "commercial" or Domain contains "cbk", "Commercial Bank of Kuwait",
+        Domain contains "ahli", "Al Ahli Bank",
+        Domain contains "boubyan", "Boubyan Bank",
+        Domain contains "warba", "Warba Bank", 
+        Domain contains "burgan", "Burgan Bank",
+        "Unknown Bank"
+    ),
+    ThreatLevel = case(
+        not(IsLegitimateBank) and SuspiciousIndicator == "Suspicious banking domain", "Critical",
+        SuspiciousIndicator == "Domain mismatch", "High",
+        SuspiciousIndicator == "Urgent language", "Medium",
+        "Low"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    Url,
+    Domain,
+    BankName,
+    IsLegitimateBank,
+    SuspiciousIndicator,
+    ThreatLevel,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Stock Exchange (Boursa) Targeting
+
+### Boursa Kuwait and Investment Fraud Detection
+**Description**: Detects targeting of Kuwait stock market and trading platforms
+
+```kql
+// Kuwait Stock Market and Investment Targeting Detection
+let KuwaitFinancialTerms = pack_array(
+    "boursa kuwait", "بورصة الكويت", "KSE", "kuwait stock exchange",
+    "premier market", "main market", "السوق الرئيسي",
+    "trading", "تداول", "portfolio", "محفظة", "shares", "أسهم", 
+    "investment", "استثمار", "bonds", "سندات", "mutual funds", "صناديق",
+    "IPO", "طرح أولي", "dividend", "أرباح", "earnings", "عائدات"
+);
+let KuwaitBrokerageCompanies = pack_array(
+    "kamco.com.kw",                  // KAMCO Investment Company
+    "nbk.com",                       // NBK Capital
+    "gulfbank.com.kw",               // Gulf Bank Capital
+    "kfh.com",                       // KFH Capital
+    "ahli-capital.com.kw",           // Ahli Capital
+    "markaz.com",                    // Al Markaz
+    "arzan.com.kw",                  // Arzan Financial Group
+    "menacorp.com"                   // Mena Corp
+);
+EmailEvents
+| where Timestamp > ago(7d)
+| where Subject has_any (KuwaitFinancialTerms) or Body has_any (KuwaitFinancialTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| extend 
+    MarketTiming = case(
+        datetime_part("hour", Timestamp) between (9 .. 12), "Market Hours (Morning)",
+        datetime_part("hour", Timestamp) between (13 .. 15), "Market Hours (Afternoon)", 
+        "After Hours"
+    ),
+    IsLegitimateTrader = SenderDomain in (KuwaitBrokerageCompanies),
+    TradingRisk = case(
+        Subject has_any ("hot tip", "insider", "guaranteed return", "مضمون", "سري"), "Critical - Insider trading language",
+        Subject has_any ("margin call", "liquidation", "تصفية", "هامش"), "High - Margin/liquidation threat",
+        Subject has_any ("urgent trade", "limited time", "عرض محدود", "وقت محدود"), "High - Urgency tactics",
+        Subject has_any ("free advice", "مجاني", "no commission", "بدون عمولة"), "Medium - Too good to be true",
+        "Low - Normal trading communication"
+    ),
+    CompanyMention = case(
+        Body contains "KAMCO", "KAMCO Investment",
+        Body contains "NBK Capital", "NBK Capital",
+        Body contains "KFH Capital", "KFH Capital", 
+        Body contains "Markaz", "Al Markaz",
+        "Other/Unknown"
+    )
+| where TradingRisk in ("Critical - Insider trading language", "High - Margin/liquidation threat", "High - Urgency tactics")
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MarketTiming,
+    IsLegitimateTrader,
+    TradingRisk,
+    CompanyMention,
+    ThreatTypes,
+    AttachmentCount
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Dinar Exchange Rate Fraud
+
+### Currency Exchange and Forex Fraud Detection
+**Description**: Detects communications related to currency manipulation or fake exchange rates
+
+```kql
+// Kuwait Dinar Exchange Rate and Currency Fraud Detection
+let CurrencyTerms = pack_array(
+    "KWD", "kuwaiti dinar", "دينار كويتي", "exchange rate", "سعر الصرف",
+    "currency exchange", "صرافة", "money exchange", "تحويل الأموال",
+    "forex", "foreign exchange", "USD/KWD", "EUR/KWD", "GBP/KWD"
+);
+let KuwaitExchangeCompanies = pack_array(
+    "kfh.com",                       // KFH (has exchange services)
+    "nbk.com",                       // NBK (has exchange services)  
+    "gulfbank.com.kw",               // Gulf Bank
+    "dollareast.com",                // Dollar East Exchange
+    "lulumoney.com",                 // Lulu Money Exchange
+    "alansari.ae",                   // Al Ansari Exchange
+    "uae-exchange.com"               // UAE Exchange
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (CurrencyTerms) or Body has_any (CurrencyTerms)
+| extend 
+    ExchangeRates = extract_all(@"([0-9]+\.?[0-9]*)\s*(?:KWD|USD|EUR|AED|SAR)", Body),
+    SenderDomain = tostring(split(SenderFromAddress, "@")[1]),
+    IsLegitimateExchanger = SenderDomain in (KuwaitExchangeCompanies)
+| extend 
+    SuspiciousOffers = case(
+        Body has_any ("best rate", "special rate", "سعر خاص", "أفضل سعر"), "Special rate offer",
+        Body has_any ("black market", "unofficial rate", "غير رسمي", "سوق سوداء"), "Unofficial exchange",
+        Body has_any ("cash only", "no questions asked", "نقد فقط", "بدون أسئلة"), "Cash-only exchange",
+        Body has_any ("bitcoin", "cryptocurrency", "بيتكوين", "عملة رقمية"), "Cryptocurrency exchange",
+        Body has_any ("urgent", "limited time", "عاجل", "وقت محدود"), "Urgency tactics",
+        "Normal exchange"
+    ),
+    RiskLevel = case(
+        SuspiciousOffers == "Unofficial exchange" or SuspiciousOffers == "Cash-only exchange", "Critical",
+        SuspiciousOffers == "Special rate offer" and not(IsLegitimateExchanger), "High",
+        SuspiciousOffers == "Cryptocurrency exchange", "High", 
+        SuspiciousOffers == "Urgency tactics", "Medium",
+        "Low"
+    )
+| where array_length(ExchangeRates) > 0 and SuspiciousOffers != "Normal exchange"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    SuspiciousOffers,
+    IsLegitimateExchanger,
+    RiskLevel,
+    ThreatTypes,
+    DeliveryLocation
+| order by Timestamp desc
+```
+
+---
+
+## Real Estate and Investment Scams
+
+### Kuwait Real Estate Investment Fraud
+**Description**: Monitors for real estate investment scams targeting Kuwait market
+
+```kql
+// Kuwait Real Estate Investment Fraud Detection
+let KuwaitAreas = pack_array(
+    "salmiya", "السالمية", "hawally", "حولي", "jahra", "الجهراء",
+    "ahmadi", "الأحمدي", "farwaniya", "الفروانية", "mubarak al-kabeer", "مبارك الكبير",
+    "kuwait city", "مدينة الكويت", "mahboula", "المهبولة", "fintas", "الفنطاس",
+    "mangaf", "المنقف", "abu halifa", "أبو حليفة", "sabah al salem", "صباح السالم",
+    "mishref", "مشرف", "bayan", "بيان", "surra", "السرة", "yarmouk", "اليرموك"
+);
+let RealEstateTerms = pack_array(
+    "property investment", "استثمار عقاري", "real estate", "عقارات", 
+    "apartment", "شقة", "villa", "فيلا", "land", "أرض", "plot", "قطعة",
+    "rent", "إيجار", "buy", "شراء", "sell", "بيع", "lease", "تأجير",
+    "mortgage", "رهن عقاري", "down payment", "دفعة مقدمة", "installments", "أقساط",
+    "developer", "مطور", "construction", "إنشاء", "new project", "مشروع جديد"
+);
+EmailEvents
+| where Timestamp > ago(7d)
+| where Subject has_any (RealEstateTerms) or Body has_any (RealEstateTerms)
+| where Subject has_any (KuwaitAreas) or Body has_any (KuwaitAreas)
+| extend 
+    PropertyArea = case(
+        Body has_any ("salmiya", "السالمية"), "Salmiya",
+        Body has_any ("hawally", "حولي"), "Hawally",
+        Body has_any ("jahra", "الجهراء"), "Jahra", 
+        Body has_any ("ahmadi", "الأحمدي"), "Ahmadi",
+        Body has_any ("farwaniya", "الفروانية"), "Farwaniya",
+        Body has_any ("kuwait city", "مدينة الكويت"), "Kuwait City",
+        "Other Kuwait Area"
+    ),
+    FraudIndicators = pack_array(
+        iff(Subject has_any ("guaranteed return", "عائد مضمون", "guaranteed profit"), "Guaranteed returns", ""),
+        iff(Subject has_any ("limited time", "urgent", "وقت محدود", "عاجل"), "Urgency tactics", ""),
+        iff(Subject has_any ("no commission", "free", "مجاني", "بدون عمولة"), "Too good to be true", ""),
+        iff(not(SenderFromAddress endswith ".kw") and UrlCount > 3, "Foreign sender with multiple links", ""),
+        iff(Subject has_any ("cash only", "bitcoin", "نقد فقط", "بيتكوين"), "Suspicious payment methods", ""),
+        iff(Subject has_any ("off-plan", "pre-launch", "قبل الإطلاق"), "Pre-construction risks", "")
+    ),
+    SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| mv-expand FraudIndicator = FraudIndicators
+| where isnotempty(FraudIndicator)
+| extend 
+    RiskScore = case(
+        FraudIndicator == "Guaranteed returns", 4,
+        FraudIndicator == "Suspicious payment methods", 4,
+        FraudIndicator == "Foreign sender with multiple links", 3,
+        FraudIndicator == "Urgency tactics", 2,
+        1
+    )
+| summarize 
+    TotalRiskScore = sum(RiskScore),
+    FraudTypes = make_set(FraudIndicator),
+    make_set(PropertyArea)
+    by Timestamp, SenderFromAddress, RecipientEmailAddress, Subject, UrlCount, ThreatTypes
+| extend 
+    OverallRisk = case(
+        TotalRiskScore >= 8, "Critical",
+        TotalRiskScore >= 5, "High",
+        TotalRiskScore >= 3, "Medium", 
+        "Low"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    PropertyArea = tostring(set_PropertyArea[0]),
+    FraudTypes,
+    TotalRiskScore,
+    OverallRisk,
+    UrlCount,
+    ThreatTypes
+| order by TotalRiskScore desc, Timestamp desc
+```
+
+---
+
+## Islamic Banking and Sharia Compliance
+
+### Islamic Banking Fraud Detection
+**Description**: Detects fraud targeting Islamic banking customers in Kuwait
+
+```kql
+// Islamic Banking and Sharia Compliance Fraud Detection
+let IslamicBankingTerms = pack_array(
+    "islamic banking", "المصرفية الإسلامية", "sharia compliant", "متوافق مع الشريعة",
+    "murabaha", "مرابحة", "mudaraba", "مضاربة", "musharaka", "مشاركة", 
+    "ijara", "إجارة", "takaful", "تكافل", "sukuk", "صكوك",
+    "halal investment", "استثمار حلال", "riba free", "خالي من الربا",
+    "profit sharing", "تقاسم الأرباح", "sharia board", "هيئة الرقابة الشرعية"
+);
+let KuwaitIslamicBanks = pack_array(
+    "kfh.com",                       // Kuwait Finance House
+    "boubyan.com",                   // Boubyan Bank  
+    "warbabank.com",                 // Warba Bank
+    "ahli.com"                       // Al Ahli Bank (has Islamic services)
+);
+EmailEvents
+| where Timestamp > ago(7d)  
+| where Subject has_any (IslamicBankingTerms) or Body has_any (IslamicBankingTerms)
+| extend 
+    SenderDomain = tostring(split(SenderFromAddress, "@")[1]),
+    IsLegitimateIslamicBank = SenderDomain in (KuwaitIslamicBanks)
+| extend 
+    IslamicFraudIndicators = pack_array(
+        iff(Body has_any ("guaranteed halal profit", "ربح حلال مضمون"), "Guaranteed Islamic profit claims", ""),
+        iff(Body has_any ("fatwa approved", "معتمد بفتوى") and not(IsLegitimateIslamicBank), "False fatwa claims", ""),
+        iff(Body has_any ("100% sharia", "شريعة 100%") and Subject has_any ("investment", "استثمار"), "Perfect compliance claims", ""),
+        iff(Body has_any ("islamic lottery", "يانصيب إسلامي", "halal gambling"), "Contradictory concepts", ""),
+        iff(Body has_any ("interest free", "خالي من الفوائد") and Body has_any ("high return", "عائد عالي"), "Contradictory promises", "")
+    ),
+    IslamicBankingType = case(
+        Body has_any ("murabaha", "مرابحة"), "Murabaha (Cost-plus financing)",
+        Body has_any ("ijara", "إجارة"), "Ijara (Islamic leasing)",
+        Body has_any ("sukuk", "صكوك"), "Sukuk (Islamic bonds)",
+        Body has_any ("takaful", "تكافل"), "Takaful (Islamic insurance)",
+        "General Islamic Banking"
+    )
+| mv-expand IslamicFraudIndicator = IslamicFraudIndicators
+| where isnotempty(IslamicFraudIndicator)
+| extend 
+    ReligiousRisk = case(
+        IslamicFraudIndicator == "Contradictory concepts", "Critical - Religious contradiction",
+        IslamicFraudIndicator == "False fatwa claims", "High - Religious authority abuse",
+        IslamicFraudIndicator == "Perfect compliance claims", "Medium - Unrealistic claims",
+        "Low - General Islamic banking fraud"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    IslamicBankingType,
+    IslamicFraudIndicator,
+    ReligiousRisk,
+    IsLegitimateIslamicBank,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Central Bank of Kuwait (CBK) Targeting
+
+### CBK Impersonation and Regulatory Fraud
+**Description**: Detects impersonation of Central Bank of Kuwait
+
+```kql
+// Central Bank of Kuwait (CBK) Impersonation Detection
+let CBKTerms = pack_array(
+    "central bank", "البنك المركزي", "CBK", "governor", "محافظ البنك",
+    "monetary policy", "السياسة النقدية", "banking regulation", "تنظيم المصارف",
+    "financial stability", "الاستقرار المالي", "banking license", "ترخيص مصرفي",
+    "compliance", "الامتثال", "supervision", "الإشراف", "circular", "تعميم"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (CBKTerms) or Body has_any (CBKTerms)
+| where SenderDisplayName has_any ("central bank", "البنك المركزي", "CBK", "governor", "محافظ")
+    or Subject has_any ("central bank of kuwait", "البنك المركزي الكويتي")
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain == "cbk.gov.kw")  // Focus on non-legitimate CBK communications
+| extend 
+    CBKImpersonationType = case(
+        SenderDisplayName contains "governor" or Subject contains "governor", "Governor impersonation",
+        SenderDisplayName contains "central bank" or Subject contains "central bank", "CBK institution impersonation",
+        Subject has_any ("circular", "تعميم"), "Official circular impersonation",
+        Subject has_any ("compliance", "violation", "الامتثال", "مخالفة"), "Regulatory threat",
+        "General CBK impersonation"
+    ),
+    RegulatoryThreat = case(
+        Subject has_any ("violation", "penalty", "fine", "مخالفة", "غرامة", "عقوبة"), "Critical - Regulatory penalty threat",
+        Subject has_any ("license revoked", "suspend", "إلغاء الترخيص", "إيقاف"), "Critical - License threat",
+        Subject has_any ("compliance failure", "فشل في الامتثال"), "High - Compliance threat",
+        Subject has_any ("urgent action", "immediate", "إجراء عاجل", "فوري"), "Medium - Urgency tactics",
+        "Low - General regulatory communication"
+    ),
+    SuspiciousElements = pack_array(
+        iff(AttachmentCount > 0, "Contains attachments", ""),
+        iff(UrlCount > 2, "Multiple URLs", ""),
+        iff(not(SenderFromAddress endswith ".kw"), "Non-Kuwait sender", ""),
+        iff(Subject has_any ("click", "login", "verify", "انقر", "تسجيل دخول"), "Action required", "")
+    )
+| mv-expand SuspiciousElement = SuspiciousElements  
+| where isnotempty(SuspiciousElement)
+| project 
+    Timestamp,
+    SenderFromAddress,
+    SenderDisplayName,
+    RecipientEmailAddress,
+    Subject,
+    CBKImpersonationType,
+    RegulatoryThreat,
+    SuspiciousElement,
+    AttachmentCount,
+    UrlCount,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Financial Quarter and Fiscal Year Attacks
+
+### Kuwait Financial Cycle Targeting
+**Description**: Detects attacks timed around Kuwait's financial quarters and fiscal year
+
+```kql
+// Kuwait Financial Cycle and Quarter-End Targeting
+let KuwaitFiscalTerms = pack_array(
+    "fiscal year", "السنة المالية", "financial year", "سنة مالية",
+    "quarter end", "نهاية الربع", "year end", "نهاية العام", 
+    "budget", "الميزانية", "audit", "مراجعة", "compliance", "الامتثال",
+    "annual report", "التقرير السنوي", "financial statement", "البيان المالي",
+    "closing", "الإغلاق", "consolidation", "التوحيد", "reconciliation", "التسوية"
+);
+EmailEvents
+| where Timestamp > ago(30d)
+| where Subject has_any (KuwaitFiscalTerms) or Body has_any (KuwaitFiscalTerms)
+| where RecipientEmailAddress has_any ("finance", "accounting", "audit", "cfo", "مالية", "محاسبة")
+    or SenderDisplayName has_any ("Finance", "CFO", "Audit", "مدير مالي", "محاسب رئيسي")
+| extend 
+    CurrentMonth = datetime_part("month", Timestamp),
+    TimingSuspicion = case(
+        CurrentMonth in (3, 6, 9, 12), "Quarter end timing - High risk period",
+        CurrentMonth in (2, 3), "Kuwait fiscal year end - Critical period",
+        "Regular timing"
+    ),
+    FinancialRisk = case(
+        Subject has_any ("urgent payment", "wire transfer", "دفع عاجل", "حوالة مالية"), "Critical - Payment fraud risk",
+        Subject has_any ("audit findings", "compliance issue", "نتائج المراجعة", "مشكلة امتثال"), "High - Audit impersonation",
+        Subject has_any ("budget approval", "موافقة الميزانية"), "High - Budget manipulation risk",
+        Subject has_any ("year end closing", "إغلاق نهاية العام"), "Medium - Year-end pressure",
+        "Low - Standard financial communication"
+    ),
+    FiscalPressure = case(
+        TimingSuspicion != "Regular timing" and FinancialRisk in ("Critical - Payment fraud risk", "High - Audit impersonation"), "Extreme",
+        TimingSuspicion != "Regular timing" and FinancialRisk contains "High", "High",
+        TimingSuspicion != "Regular timing", "Medium",
+        "Low"
+    )
+| where TimingSuspicion != "Regular timing" or FinancialRisk contains "Critical"
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    TimingSuspicion,
+    FinancialRisk,
+    FiscalPressure,
+    ThreatTypes,
+    AttachmentCount
+| order by Timestamp desc
+```
+
+---
+
+## Usage Guidelines
+
+### Deployment Recommendations
+1. **Start with banking domain monitoring** - Deploy the first query for immediate phishing protection
+2. **Add CBK impersonation detection** - Critical for regulatory compliance
+3. **Implement during fiscal periods** - Deploy fiscal cycle queries during quarter-ends
+4. **Monitor Islamic banking** - Important for Kuwait's Islamic finance sector
+
+### Customization Tips
+- Update bank domain lists with your organization's banking partners
+- Adjust Arabic translations based on local dialects
+- Modify risk scoring based on your organization's risk appetite
+- Add additional Kuwait-specific financial institutions
+
+### Integration Notes
+- Export high-risk findings to SIEM for correlation
+- Create automated responses for critical CBK impersonation attempts
+- Generate weekly reports during fiscal periods
+- Share intelligence with local financial sector security teams
+
+---
+
+**Compliance Note**: These queries help organizations comply with Central Bank of Kuwait cybersecurity requirements and protect against sector-specific financial threats.
