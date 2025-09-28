@@ -1,0 +1,191 @@
+// ======================================================================
+// Kuwait PACI Civil ID – Unified Hunt Pack (Email + Cloud Apps + Endpoints)
+// Author: Ali AlEnezi
+// ======================================================================
+
+// ----------------------------
+// 0) Parameters (edit here)
+// ----------------------------
+let lookback = 30d;                 // time window
+let includeEmail = true;            // EmailEvents, EmailAttachmentInfo, EmailUrlInfo
+let includeCloudApps = true;        // CloudAppEvents (SharePoint/OneDrive/Teams via Defender for Cloud Apps)
+let includeEndpoints = true;        // DeviceProcessEvents, DeviceFileEvents, DeviceNetworkEvents
+let enforceCenturyDigits = true;    // true => only IDs starting with 2 or 3; false => any 12 digits
+let requireChecksum = true;         // true => only IDs passing checksum; false => show all candidates
+let maskOutput = true;              // true => mask last 3 digits in output for safer triage
+
+// -------------------------------------------
+// 1) Regex pattern & helpers for Kuwait PACI
+// -------------------------------------------
+// Candidate regex:
+//  - Standard: 12 digits
+//  - Stricter: 1st digit 2 or 3 (1900s/2000s)
+let paci_regex = iff(enforceCenturyDigits, @"\b[23]\d{11}\b", @"\b\d{12}\b");
+
+// Checksum validator (weights 2,1,6,3,7,9,10,5,8,4,2; mod-11)
+let paci_is_valid = (id:string)
+{
+    iff(id matches regex @"^\d{12}$",
+        let sum =
+              toint(substring(id,0,1))*2
+            + toint(substring(id,1,1))*1
+            + toint(substring(id,2,1))*6
+            + toint(substring(id,3,1))*3
+            + toint(substring(id,4,1))*7
+            + toint(substring(id,5,1))*9
+            + toint(substring(id,6,1))*10
+            + toint(substring(id,7,1))*5
+            + toint(substring(id,8,1))*8
+            + toint(substring(id,9,1))*4
+            + toint(substring(id,10,1))*2;
+        let check = (11 - (sum % 11)) % 11;   // robust mod-11
+        // Optional DOB plausibility (YYMMDD at positions 2..7)
+        let mm = toint(substring(id,3,2));
+        let dd = toint(substring(id,5,2));
+        toint(substring(id,11,1)) == check and mm between (1..12) and dd between (1..31),
+        false
+    )
+};
+
+// Extract all candidate matches from any text
+let paci_extract = (s:string) { extract_all(paci_regex, tostring(s)); };
+
+// Output masking
+let paci_mask = (id:string) { iff(maskOutput, strcat(substring(id,0,9), "***"), id) };
+
+// Standardized projection for all sources
+let shape = (Timestamp:datetime, Source:string, SubSource:string, PACI:string,
+             PrimaryEntity:string, SecondaryEntity:string, Details:string, EvidenceId:string) {
+    project Timestamp, Source, SubSource, PACI=paci_mask(PACI),
+            PrimaryEntity, SecondaryEntity, Details, EvidenceId
+};
+
+// -------------------------------------------
+// 2) Source queries (each returns unified schema)
+// -------------------------------------------
+
+// 2A) EMAIL — Subject
+let Q_Email_Subject =
+EmailEvents
+| where Timestamp > ago(lookback)
+| extend candidates = paci_extract(Subject)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| invoke shape(Timestamp, "Email", "Subject", PACI,
+               strcat(SenderFromAddress), tostring(make_set(RecipientEmailAddress)),
+               Subject, NetworkMessageId);
+
+// 2B) EMAIL — Attachment file names
+let Q_Email_Attach =
+EmailAttachmentInfo
+| where Timestamp > ago(lookback)
+| extend candidates = paci_extract(FileName)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| join kind=leftouter (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+    | project NetworkMessageId, SenderFromAddress, Subject, RecipientEmailAddress, Timestamp
+) on NetworkMessageId
+| invoke shape(Timestamp, "Email", "AttachmentName", PACI,
+               strcat(SenderFromAddress), tostring(make_set(RecipientEmailAddress)),
+               strcat("File: ", FileName, " | Subj: ", Subject), NetworkMessageId);
+
+// 2C) EMAIL — URLs inside emails
+let Q_Email_Urls =
+EmailUrlInfo
+| where Timestamp > ago(lookback)
+| extend candidates = paci_extract(Url)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| join kind=leftouter (
+    EmailEvents
+    | where Timestamp > ago(lookback)
+    | project NetworkMessageId, SenderFromAddress, Subject, Timestamp
+) on NetworkMessageId
+| invoke shape(Timestamp, "Email", "Url", PACI,
+               strcat(SenderFromAddress), Url,
+               strcat("Subj: ", Subject), NetworkMessageId);
+
+// 2D) CLOUD APPS — SP/OD/Teams via Defender for Cloud Apps
+let Q_CloudApps_Generic =
+CloudAppEvents
+| where Timestamp > ago(lookback)
+| extend Scan = strcat(ObjectName, " ", tostring(Description), " ", tostring(AdditionalFields))
+| extend candidates = paci_extract(Scan)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| invoke shape(Timestamp, "CloudApp", "Object/Desc/Fields", PACI,
+               strcat(AccountDisplayName, " @ ", Application), ObjectName,
+               tostring(Description), tostring(EventOriginalType));
+
+// 2E) ENDPOINT — Process command lines
+let Q_Edr_Process =
+DeviceProcessEvents
+| where Timestamp > ago(lookback)
+| extend Scan = strcat(ProcessCommandLine, " ", InitiatingProcessCommandLine)
+| extend candidates = paci_extract(Scan)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| invoke shape(Timestamp, "Endpoint", "Process", PACI,
+               DeviceName, AccountName,
+               strcat(FileName, " :: ", ProcessCommandLine), tostring(ProcessId));
+
+// 2F) ENDPOINT — File names & paths
+let Q_Edr_Files =
+DeviceFileEvents
+| where Timestamp > ago(lookback)
+| extend Scan = strcat(FolderPath, "\", FileName, " ", InitiatingProcessCommandLine)
+| extend candidates = paci_extract(Scan)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| invoke shape(Timestamp, "Endpoint", "FileEvent", PACI,
+               DeviceName, InitiatingProcessFileName,
+               strcat(ActionType, " :: ", FolderPath, "\", FileName), tostring(SHA1));
+
+// 2G) ENDPOINT — Outbound URLs/IPs & process context
+let Q_Edr_Net =
+DeviceNetworkEvents
+| where Timestamp > ago(lookback)
+| extend Scan = strcat(RemoteUrl, " ", Url, " ", InitiatingProcessCommandLine)
+| extend candidates = paci_extract(Scan)
+| mv-expand PACI = candidates to typeof(string)
+| extend IsValid = paci_is_valid(PACI)
+| where iff(requireChecksum, IsValid, true)
+| invoke shape(Timestamp, "Endpoint", "Network", PACI,
+               DeviceName, coalesce(RemoteUrl, tostring(RemoteIP)),
+               strcat(Protocol, ":", tostring(RemotePort), " :: ", InitiatingProcessFileName), tostring(RemoteIP));
+
+// -------------------------------------------
+// 3) Unified detailed results
+// -------------------------------------------
+union
+(iff(includeEmail, Q_Email_Subject, Q_Email_Subject | where false)),
+(iff(includeEmail, Q_Email_Attach,   Q_Email_Attach   | where false)),
+(iff(includeEmail, Q_Email_Urls,     Q_Email_Urls     | where false)),
+(iff(includeCloudApps, Q_CloudApps_Generic, Q_CloudApps_Generic | where false)),
+(iff(includeEndpoints, Q_Edr_Process,       Q_Edr_Process       | where false)),
+(iff(includeEndpoints, Q_Edr_Files,         Q_Edr_Files         | where false)),
+(iff(includeEndpoints, Q_Edr_Net,           Q_Edr_Net           | where false))
+| order by Timestamp desc
+// ---- End of Detailed Results ----
+
+// ======================================================================
+// 4) (Optional) Daily summary (uncomment to run as a second result set)
+// ======================================================================
+/*
+union Q_Email_Subject, Q_Email_Attach, Q_Email_Urls, Q_CloudApps_Generic, Q_Edr_Process, Q_Edr_Files, Q_Edr_Net
+| summarize
+    Hits = count(),
+    UniqueEntities = dcount(PrimaryEntity),
+    FirstSeen = min(Timestamp),
+    LastSeen  = max(Timestamp)
+  by PACI, Source
+| order by LastSeen desc
+*/
