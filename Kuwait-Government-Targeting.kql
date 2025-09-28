@@ -1,0 +1,511 @@
+# Kuwait Government and Ministry Targeting Detection
+
+## Overview
+Advanced hunting queries to detect impersonation and targeting of Kuwait government entities, ministries, and official institutions.
+
+**Author**: Ali AlEnezi  
+**Email**: site@hotmail.com  
+**LinkedIn**: linkedin.com/in/alenizi  
+
+---
+
+## Kuwait Government Domain Monitoring
+
+### Government Domain Impersonation Detection
+**Description**: Monitors for impersonation of Kuwait government domains and entities
+
+```kql
+// Kuwait Government Domain Impersonation Detection
+let KuwaitGovDomains = pack_array(
+    "gov.kw",                        // Main government domain
+    "cbk.gov.kw",                    // Central Bank of Kuwait
+    "kuna.net.kw",                   // Kuwait News Agency
+    "e.gov.kw",                      // Kuwait eGovernment Portal
+    "mof.gov.kw",                    // Ministry of Finance
+    "moci.gov.kw",                   // Ministry of Commerce & Industry
+    "csb.gov.kw",                    // Central Statistical Bureau
+    "kfsd.gov.kw",                   // Kuwait Fire Service Directorate
+    "moh.gov.kw",                    // Ministry of Health
+    "moe.edu.kw",                    // Ministry of Education
+    "paci.gov.kw",                   // Public Authority for Civil Information
+    "manpower.gov.kw",               // Manpower & Government Restructuring Program
+    "kms.gov.kw"                     // Kuwait Meteorological Service
+);
+EmailUrlInfo
+| where Timestamp > ago(7d)
+| extend Domain = tostring(parse_url(Url).Host)
+| where Domain has_any (KuwaitGovDomains) or (Domain contains "gov" and Domain endswith ".kw")
+| join EmailEvents on NetworkMessageId
+| where DeliveryAction == "Delivered"
+| extend 
+    IsLegitimateGov = Domain in (KuwaitGovDomains),
+    GovernmentEntity = case(
+        Domain contains "cbk", "Central Bank of Kuwait",
+        Domain contains "mof", "Ministry of Finance",
+        Domain contains "moci", "Ministry of Commerce & Industry",
+        Domain contains "moh", "Ministry of Health", 
+        Domain contains "moe", "Ministry of Education",
+        Domain contains "paci", "Public Authority for Civil Information",
+        Domain contains "kuna", "Kuwait News Agency",
+        Domain contains "e.gov", "Kuwait eGovernment",
+        "Other Government Entity"
+    )
+| where not(IsLegitimateGov)  // Focus on suspicious government-like domains
+| extend 
+    GovernmentImpersonation = case(
+        Domain contains "cbk" and not(Domain == "cbk.gov.kw"), "Central Bank impersonation",
+        Domain contains "gov" and not(Domain endswith ".kw"), "Foreign government domain",
+        Domain contains "ministry" or Domain contains "وزارة", "Ministry impersonation",
+        Domain contains "kuwait" and Domain contains "gov", "Kuwait government impersonation",
+        Domain contains "paci" and not(Domain == "paci.gov.kw"), "PACI impersonation",
+        "General government impersonation"
+    ),
+    ThreatLevel = case(
+        Domain contains "cbk", "Critical - Central Bank",
+        Domain contains "mof", "Critical - Ministry of Finance",
+        Domain contains "paci", "High - Civil Information Authority", 
+        Domain contains "gov", "High - Government impersonation",
+        "Medium - Government-related"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    Url,
+    Domain,
+    GovernmentEntity,
+    GovernmentImpersonation,
+    ThreatLevel,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Ministry-Specific Targeting
+
+### Ministry of Interior Impersonation
+**Description**: Detects impersonation of Kuwait Ministry of Interior (security/visa services)
+
+```kql
+// Ministry of Interior and Security Services Impersonation
+let InteriorMinistryTerms = pack_array(
+    "ministry of interior", "وزارة الداخلية", "MOI", "interior ministry",
+    "residence permit", "إقامة", "visa", "تأشيرة", "deportation", "ترحيل",
+    "security clearance", "تصريح أمني", "criminal record", "سجل جنائي",
+    "traffic violation", "مخالفة مرورية", "passport services", "خدمات الجوازات",
+    "immigration", "الهجرة", "border control", "مراقبة الحدود"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (InteriorMinistryTerms) or Body has_any (InteriorMinistryTerms)
+| where SenderDisplayName has_any ("ministry", "وزارة", "MOI", "interior", "داخلية")
+    or Subject has_any ("ministry of interior", "وزارة الداخلية")
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain endswith "gov.kw")  // Focus on non-government senders
+| extend 
+    InteriorServiceType = case(
+        Subject has_any ("residence permit", "إقامة"), "Residence Services",
+        Subject has_any ("visa", "تأشيرة"), "Visa Services",
+        Subject has_any ("traffic", "مرور"), "Traffic Services",
+        Subject has_any ("passport", "جواز"), "Passport Services",
+        Subject has_any ("security", "أمن"), "Security Services",
+        "General Interior Services"
+    ),
+    SecurityThreat = case(
+        Subject has_any ("violation", "fine", "penalty", "مخالفة", "غرامة"), "Critical - Legal threat",
+        Subject has_any ("deportation", "cancel", "ترحيل", "إلغاء"), "Critical - Deportation threat",
+        Subject has_any ("expired", "renew", "منتهي", "تجديد"), "High - Document urgency",
+        Subject has_any ("appointment", "موعد"), "Medium - Service appointment",
+        "Low - General inquiry"
+    ),
+    UrgencyTactics = pack_array(
+        iff(Subject has_any ("urgent", "immediate", "عاجل", "فوري"), "Urgent language", ""),
+        iff(Subject has_any ("24 hours", "يوم واحد"), "Time pressure", ""),
+        iff(AttachmentCount > 0, "Suspicious attachments", ""),
+        iff(UrlCount > 2, "Multiple links", "")
+    )
+| mv-expand UrgencyTactic = UrgencyTactics
+| where isnotempty(UrgencyTactic)
+| project 
+    Timestamp,
+    SenderFromAddress,
+    SenderDisplayName,
+    RecipientEmailAddress,
+    Subject,
+    InteriorServiceType,
+    SecurityThreat,
+    UrgencyTactic,
+    AttachmentCount,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+### PACI (Civil Information Authority) Targeting
+**Description**: Detects targeting related to Kuwait's Public Authority for Civil Information
+
+```kql
+// PACI (Public Authority for Civil Information) Targeting
+let PACITerms = pack_array(
+    "PACI", "الهيئة العامة للمعلومات المدنية", "civil information", "معلومات مدنية",
+    "civil ID", "هوية مدنية", "birth certificate", "شهادة ميلاد",
+    "death certificate", "شهادة وفاة", "marriage certificate", "شهادة زواج",
+    "divorce certificate", "شهادة طلاق", "family book", "دفتر العائلة",
+    "population register", "السجل السكاني", "demographic data", "بيانات ديموغرافية"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (PACITerms) or Body has_any (PACITerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain == "paci.gov.kw")  // Focus on non-PACI communications
+| extend 
+    PACIServiceType = case(
+        Subject has_any ("civil ID", "هوية مدنية"), "Civil ID Services",
+        Subject has_any ("birth certificate", "شهادة ميلاد"), "Birth Certificate",
+        Subject has_any ("marriage", "زواج"), "Marriage Certificate",
+        Subject has_any ("death", "وفاة"), "Death Certificate",
+        Subject has_any ("family book", "دفتر العائلة"), "Family Registration",
+        "General PACI Services"
+    ),
+    DataSensitivity = case(
+        Subject has_any ("civil ID", "هوية مدنية"), "Critical - National ID",
+        Subject has_any ("family book", "دفتر العائلة"), "High - Family data",
+        Subject has_any ("certificate", "شهادة"), "High - Official documents",
+        "Medium - Personal information"
+    ),
+    ImpersonationRisk = case(
+        SenderDisplayName contains "PACI" and not(SenderDomain == "paci.gov.kw"), "Critical - PACI impersonation",
+        Subject has_any ("update", "verify", "تحديث", "تحقق"), "High - Data manipulation",
+        Subject has_any ("expired", "renew", "منتهي", "تجديد"), "Medium - Document renewal",
+        "Low - General inquiry"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    PACIServiceType,
+    DataSensitivity,
+    ImpersonationRisk,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Customs and Trade Authorities
+
+### Kuwait General Administration of Customs Targeting
+**Description**: Detects impersonation of Kuwait Customs Authority
+
+```kql
+// Kuwait Customs Authority Impersonation Detection
+let CustomsTerms = pack_array(
+    "customs", "الجمارك", "GAC", "general administration of customs",
+    "import", "استيراد", "export", "تصدير", "duty", "رسوم جمركية",
+    "clearance", "تخليص جمركي", "shipment", "شحنة", "cargo", "بضاعة",
+    "container", "حاوية", "customs declaration", "إقرار جمركي",
+    "inspection", "معاينة جمركية", "release", "إفراج", "detention", "حجز البضاعة",
+    "customs broker", "مخلص جمركي", "free zone", "المنطقة الحرة"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (CustomsTerms) or Body has_any (CustomsTerms)
+| where SenderDisplayName has_any ("customs", "الجمارك", "GAC", "general administration")
+    or Subject has_any ("kuwait customs", "الجمارك الكويتية")
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain endswith "gov.kw")  // Focus on non-government senders
+| extend 
+    CustomsServiceType = case(
+        Subject has_any ("import", "استيراد"), "Import Services",
+        Subject has_any ("export", "تصدير"), "Export Services",
+        Subject has_any ("clearance", "تخليص"), "Customs Clearance",
+        Subject has_any ("inspection", "معاينة"), "Customs Inspection",
+        Subject has_any ("duty", "رسوم"), "Duty Payment",
+        "General Customs Services"
+    ),
+    CustomsScam = case(
+        Subject has_any ("detained", "seized", "محجوز", "مصادر"), "Critical - Package detention scam",
+        Subject has_any ("pay duty", "urgent payment", "دفع رسوم عاجل"), "Critical - Customs duty scam", 
+        Subject has_any ("clearance required", "action required", "مطلوب إجراء"), "High - Clearance scam",
+        Subject has_any ("inspection notice", "إشعار معاينة"), "High - Fake inspection notice",
+        Subject has_any ("fine", "penalty", "غرامة", "عقوبة"), "Medium - Penalty threat",
+        "Low - General customs communication"
+    ),
+    TradingRisk = case(
+        UrlCount > 3, "Multiple suspicious links",
+        AttachmentCount > 0, "Suspicious attachments",
+        Subject has_any ("urgent", "immediate", "عاجل", "فوري"), "Urgency tactics",
+        "Standard customs targeting"
+    )
+| where CustomsScam != "Low - General customs communication"  // Focus on scams
+| project 
+    Timestamp,
+    SenderFromAddress,
+    SenderDisplayName,
+    RecipientEmailAddress,
+    Subject,
+    CustomsServiceType,
+    CustomsScam,
+    TradingRisk,
+    UrlCount,
+    AttachmentCount,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Kuwait Municipality and Local Government
+
+### Kuwait Municipality Services Targeting  
+**Description**: Detects targeting of Kuwait Municipality services
+
+```kql
+// Kuwait Municipality and Local Government Targeting
+let MunicipalityTerms = pack_array(
+    "municipality", "البلدية", "kuwait municipality", "بلدية الكويت",
+    "building permit", "رخصة بناء", "construction license", "ترخيص إنشاء",
+    "trade license", "رخصة تجارية", "business permit", "تصريح تجاري",
+    "municipal services", "خدمات البلدية", "city planning", "تخطيط المدن",
+    "zoning", "تقسيم المناطق", "property tax", "ضريبة العقار",
+    "health certificate", "شهادة صحية", "food license", "رخصة غذائية"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (MunicipalityTerms) or Body has_any (MunicipalityTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain endswith "gov.kw")  // Focus on non-government senders
+| extend 
+    MunicipalService = case(
+        Subject has_any ("building permit", "رخصة بناء"), "Building Permits",
+        Subject has_any ("trade license", "رخصة تجارية"), "Trade Licensing",
+        Subject has_any ("health certificate", "شهادة صحية"), "Health Services",
+        Subject has_any ("food license", "رخصة غذائية"), "Food Licensing",
+        Subject has_any ("property tax", "ضريبة"), "Property Services",
+        "General Municipal Services"
+    ),
+    MunicipalThreat = case(
+        Subject has_any ("violation", "fine", "مخالفة", "غرامة"), "Critical - Municipal violation",
+        Subject has_any ("license revoked", "canceled", "ملغية", "محجوبة"), "High - License threat",
+        Subject has_any ("inspection", "معاينة"), "Medium - Inspection notice",
+        Subject has_any ("renewal", "تجديد"), "Low - Renewal notice",
+        "General municipal communication"
+    ),
+    BusinessImpact = case(
+        MunicipalService == "Trade Licensing", "High - Business operations",
+        MunicipalService == "Building Permits", "High - Construction projects",
+        MunicipalService == "Food Licensing", "Medium - Food business",
+        "Low - General impact"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    MunicipalService,
+    MunicipalThreat,
+    BusinessImpact,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Public Authority for Manpower Targeting
+
+### Kuwait Manpower Authority Impersonation
+**Description**: Detects impersonation of Kuwait's manpower and employment authorities
+
+```kql
+// Kuwait Manpower Authority and Employment Services Targeting
+let ManpowerTerms = pack_array(
+    "manpower", "القوى العاملة", "employment", "التوظيف", "work permit", "إذن عمل",
+    "labor law", "قانون العمل", "worker rights", "حقوق العمال",
+    "employment contract", "عقد عمل", "salary protection", "حماية الأجور",
+    "domestic worker", "عاملة منزلية", "expat worker", "عامل وافد",
+    "recruitment", "التوظيف", "sponsor", "الكفيل", "visa transfer", "نقل الكفالة"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (ManpowerTerms) or Body has_any (ManpowerTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain endswith "gov.kw")
+| extend 
+    ManpowerServiceType = case(
+        Subject has_any ("work permit", "إذن عمل"), "Work Permits",
+        Subject has_any ("visa transfer", "نقل الكفالة"), "Visa Transfer",
+        Subject has_any ("employment contract", "عقد عمل"), "Employment Contracts",
+        Subject has_any ("domestic worker", "عاملة منزلية"), "Domestic Worker Services",
+        Subject has_any ("salary protection", "حماية الأجور"), "Salary Protection",
+        "General Manpower Services"
+    ),
+    EmploymentThreat = case(
+        Subject has_any ("visa canceled", "deported", "ملغاة", "مرحل"), "Critical - Deportation threat",
+        Subject has_any ("work ban", "منع من العمل"), "Critical - Work ban threat",
+        Subject has_any ("violation", "fine", "مخالفة", "غرامة"), "High - Labor violation",
+        Subject has_any ("contract violation", "مخالفة العقد"), "Medium - Contract issue",
+        "Low - General employment matter"
+    ),
+    WorkerCategory = case(
+        Subject has_any ("domestic", "منزلية"), "Domestic Workers",
+        Subject has_any ("skilled", "ماهر"), "Skilled Workers",
+        Subject has_any ("expat", "وافد"), "Expatriate Workers",
+        "General Workers"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    ManpowerServiceType,
+    EmploymentThreat,
+    WorkerCategory,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## E-Government Portal Targeting
+
+### Kuwait E-Government Services Impersonation
+**Description**: Detects targeting of Kuwait's e-government portal and digital services
+
+```kql
+// Kuwait E-Government Portal and Digital Services Targeting
+let EGovTerms = pack_array(
+    "e.gov.kw", "egovernment", "الحكومة الإلكترونية", "digital services", "خدمات رقمية",
+    "online services", "خدمات إلكترونية", "government portal", "البوابة الحكومية",
+    "digital ID", "الهوية الرقمية", "electronic signature", "التوقيع الإلكتروني",
+    "online payment", "دفع إلكتروني", "digital certificate", "شهادة رقمية",
+    "meta ID", "هوية ميتا", "kuwait mobile ID", "الهوية المتنقلة الكويتية"
+);
+EmailEvents
+| where Timestamp > ago(24h)
+| where Subject has_any (EGovTerms) or Body has_any (EGovTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| where not(SenderDomain == "e.gov.kw")  // Focus on non-official e-gov communications
+| extend 
+    DigitalServiceType = case(
+        Subject has_any ("digital ID", "الهوية الرقمية"), "Digital Identity",
+        Subject has_any ("online payment", "دفع إلكتروني"), "Electronic Payments",
+        Subject has_any ("digital certificate", "شهادة رقمية"), "Digital Certificates", 
+        Subject has_any ("electronic signature", "التوقيع الإلكتروني"), "E-Signature Services",
+        Subject has_any ("mobile ID", "الهوية المتنقلة"), "Mobile ID Services",
+        "General E-Government Services"
+    ),
+    DigitalThreat = case(
+        Subject has_any ("account suspended", "الحساب معلق"), "Critical - Account suspension",
+        Subject has_any ("verify identity", "تحقق من الهوية"), "High - Identity verification scam",
+        Subject has_any ("update credentials", "تحديث بيانات الاعتماد"), "High - Credential harvesting",
+        Subject has_any ("system upgrade", "ترقية النظام"), "Medium - System maintenance scam",
+        "Low - General digital services"
+    ),
+    CyberRisk = case(
+        UrlCount > 2 and Subject has_any ("login", "verify", "تسجيل دخول"), "Critical - Credential harvesting",
+        AttachmentCount > 0 and Subject has_any ("certificate", "شهادة"), "High - Malicious attachments",
+        Subject has_any ("click here", "انقر هنا"), "Medium - Phishing attempt",
+        "Low - Standard communication"
+    )
+| project 
+    Timestamp,
+    SenderFromAddress,
+    RecipientEmailAddress,
+    Subject,
+    DigitalServiceType,
+    DigitalThreat,
+    CyberRisk,
+    UrlCount,
+    AttachmentCount,
+    ThreatTypes
+| order by Timestamp desc
+```
+
+---
+
+## Combined Government Threat Detection
+
+### Comprehensive Kuwait Government Targeting Analysis
+**Description**: Analyzes all government-related threats in a single comprehensive query
+
+```kql
+// Comprehensive Kuwait Government Targeting Analysis
+let AllGovTerms = pack_array(
+    // General government
+    "government", "الحكومة", "ministry", "وزارة", "authority", "هيئة",
+    // Specific entities
+    "CBK", "PACI", "MOI", "customs", "الجمارك", "municipality", "البلدية",
+    "manpower", "القوى العاملة", "e.gov.kw", "الحكومة الإلكترونية"
+);
+EmailEvents
+| where Timestamp > ago(7d)
+| where Subject has_any (AllGovTerms) or Body has_any (AllGovTerms)
+| extend SenderDomain = tostring(split(SenderFromAddress, "@")[1])
+| extend IsLegitimateGov = SenderDomain endswith "gov.kw"
+| where not(IsLegitimateGov)  // Focus on non-government senders
+| extend 
+    GovernmentCategory = case(
+        Subject has_any ("CBK", "central bank", "البنك المركزي"), "Central Bank",
+        Subject has_any ("PACI", "civil information", "الهيئة العامة للمعلومات"), "Civil Information",
+        Subject has_any ("MOI", "interior", "الداخلية"), "Ministry of Interior",
+        Subject has_any ("customs", "الجمارك"), "Customs Authority",
+        Subject has_any ("municipality", "البلدية"), "Municipality",
+        Subject has_any ("manpower", "القوى العاملة"), "Manpower Authority",
+        Subject has_any ("e.gov", "الحكومة الإلكترونية"), "E-Government",
+        "Other Government"
+    ),
+    ThreatSeverity = case(
+        GovernmentCategory == "Central Bank", 5,
+        GovernmentCategory == "Civil Information", 4,
+        GovernmentCategory == "Ministry of Interior", 4,
+        GovernmentCategory == "Customs Authority", 3,
+        GovernmentCategory == "E-Government", 3,
+        2
+    ),
+    CommonTactics = pack_array(
+        iff(Subject has_any ("urgent", "عاجل"), "Urgency tactics", ""),
+        iff(Subject has_any ("violation", "fine", "مخالفة", "غرامة"), "Legal threats", ""),
+        iff(Subject has_any ("suspended", "canceled", "ملغي", "معلق"), "Service suspension", ""),
+        iff(UrlCount > 2, "Multiple links", ""),
+        iff(AttachmentCount > 0, "Suspicious attachments", "")
+    )
+| mv-expand CommonTactic = CommonTactics
+| where isnotempty(CommonTactic)
+| summarize 
+    ThreatCount = count(),
+    TacticsUsed = make_set(CommonTactic),
+    UniqueRecipients = dcount(RecipientEmailAddress),
+    FirstSeen = min(Timestamp),
+    LastSeen = max(Timestamp)
+    by GovernmentCategory, SenderFromAddress, ThreatSeverity
+| extend RiskScore = ThreatSeverity * ThreatCount
+| order by RiskScore desc, LastSeen desc
+```
+
+---
+
+## Usage Guidelines
+
+### Deployment Priority
+1. **Central Bank (CBK)** - Deploy first for critical financial protection
+2. **PACI** - Deploy second for personal data protection
+3. **Ministry of Interior** - Important for visa/residency fraud
+4. **E-Government** - Covers broad digital service targeting
+
+### Customization Notes
+- Update government domain lists with current official domains
+- Adjust Arabic translations for local dialect variations
+- Modify threat severity scoring based on organizational priorities
+- Add seasonal patterns for government service periods
+
+### Integration Recommendations
+- Forward high-severity government threats to SIEM immediately
+- Create automated blocking for critical CBK impersonation
+- Generate daily reports during government fiscal periods
+- Share intelligence with Kuwait CERT for government targeting
+
+---
+
+**Security Note**: These queries help protect against sophisticated attacks targeting Kuwait's government infrastructure and services, which are often used to gain credibility for fraud and social engineering attacks.
