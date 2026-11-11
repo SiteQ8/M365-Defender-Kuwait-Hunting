@@ -428,7 +428,7 @@ EmailEvents
 ## Combined Government Threat Detection
 
 ### Comprehensive Kuwait Government Targeting Analysis
-**Description**: Analyzes all government-related threats in a single comprehensive query
+**Description**: Analyzes all government-related threats in one query
 
 ```kql
 // Comprehensive Kuwait Government Targeting Analysis
