@@ -427,11 +427,11 @@ EmailEvents
 
 ## Combined Government Threat Detection
 
-### Comprehensive Kuwait Government Targeting Analysis
+### Kuwait Government Targeting Analysis
 **Description**: Analyzes all government-related threats in one query
 
 ```kql
-// Comprehensive Kuwait Government Targeting Analysis
+// Kuwait Government Targeting Analysis
 let AllGovTerms = pack_array(
     // General government
     "government", "الحكومة", "ministry", "وزارة", "authority", "هيئة",
@@ -505,7 +505,3 @@ EmailEvents
 - Create automated blocking for critical CBK impersonation
 - Generate daily reports during government fiscal periods
 - Share intelligence with Kuwait CERT for government targeting
-
----
-
-**Security Note**: These queries help protect against sophisticated attacks targeting Kuwait's government infrastructure and services, which are often used to gain credibility for fraud and social engineering attacks.

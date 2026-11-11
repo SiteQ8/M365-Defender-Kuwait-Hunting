@@ -143,7 +143,7 @@ EmailEvents
 
 ## Kuwait Phone Number Detection
 
-### Comprehensive Kuwait Phone Number Patterns
+### Kuwait Phone Number Patterns
 **Description**: Detects all Kuwait phone number formats including mobile and landline
 
 ```kql
@@ -293,11 +293,11 @@ EmailEvents
 
 ## Combined Personal Data Detection
 
-### Comprehensive Kuwait PII Scanner
+### Kuwait PII Scanner
 **Description**: Detects multiple types of Kuwait personal data in single query
 
 ```kql
-// Comprehensive Kuwait Personal Data Detection
+// Kuwait Personal Data Detection
 EmailEvents
 | where Timestamp > ago(24h)
 | extend 

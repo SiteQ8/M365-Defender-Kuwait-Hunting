@@ -386,11 +386,11 @@ EmailEvents
 
 ## Combined Telecom Threat Analysis
 
-### Comprehensive Kuwait Telecom Targeting Summary
+### Kuwait Telecom Targeting Summary
 **Description**: Covers all telecom-related threats in Kuwait
 
 ```kql
-// Comprehensive Kuwait Telecommunications Targeting Analysis
+// Kuwait Telecommunications Targeting Analysis
 let AllTelecomIndicators = pack_array(
     // Providers
     "zain", "ooredoo", "viva", "stc", "qualitynet", "gulfnet", "fasttelco",
@@ -465,7 +465,3 @@ EmailEvents
 - Forward infrastructure threats to national CERT
 - Generate daily reports during major service outages
 - Share mobile fraud patterns with telecom security teams
-
----
-
-**Industry Note**: These queries help protect against telecom-specific fraud patterns that are commonly used to target Kuwait residents and businesses, including SIM swap attacks, billing fraud, and infrastructure targeting.

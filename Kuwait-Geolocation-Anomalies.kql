@@ -475,7 +475,3 @@ CloudAppEvents
 - Consider time-based sampling for historical analysis
 - Use IP range caching for better performance
 - Implement alerting thresholds to avoid alert fatigue
-
----
-
-**Network Security Note**: These queries provide essential geographic and network-based security monitoring tailored to Kuwait's unique network infrastructure, business culture, and time zone considerations.

@@ -469,7 +469,3 @@ EmailEvents
 - Consider sampling for large datasets to maintain performance
 - Use time-based filtering to focus on recent threats
 - Implement caching for frequently used Arabic pattern matches
-
----
-
-**Language Analysis Note**: These queries cover Arabic language security analysis, essential for protecting Arabic-speaking organizations from culturally and linguistically targeted cyber attacks.
