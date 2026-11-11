@@ -1,4 +1,4 @@
-# M365-Defender-Kuwait-Hunting 🇰🇼🛡️
+# M365-Defender-Kuwait-Hunting
 
 ## Microsoft 365 Defender Advanced Hunting Queries for Kuwait Cybersecurity
 
@@ -11,35 +11,35 @@
 
 ---
 
-## 👨‍💻 About the Author
+## About the Author
 
 **Ali AlEnezi**  
 🔒 Kuwait  
 🎓 SANS/GIAC Certified Security Professional 
 
-- 📧 Email: [site@hotmail.com](mailto:site@hotmail.com)
-- 💼 LinkedIn: [linkedin.com/in/alenizi](https://www.linkedin.com/in/alenizi/)
-- 🌍 Location: Kuwait
-- 🏢 Expertise: SOC Operations, Threat Hunting, Microsoft 365 Security
+- Email: [site@hotmail.com](mailto:site@hotmail.com)
+- LinkedIn: [linkedin.com/in/alenizi](https://www.linkedin.com/in/alenizi/)
+- Location: Kuwait
+- Expertise: SOC Operations, Threat Hunting, Microsoft 365 Security
 
 ---
 
-## 🌟 What Makes This Repository Special
+## What Makes This Repository Special
 
-### 🇰🇼 **Kuwait-Specific Intelligence**
+### **Kuwait-Specific Intelligence**
 - **Civil ID Detection** with proper regex validation and privacy masking
 - **Kuwait IBAN, Phone Numbers, Passport** pattern recognition
 - **Arabic Language Analysis** for social engineering detection
 - **Kuwait Business Hours & Holiday** anomaly detection
 - **Local Banking, Government, Telecom** targeting patterns
 
-### 🏦 **Financial Sector Focus**
+### **Financial Sector Focus**
 - **Kuwait Stock Exchange (Boursa)** targeting detection
 - **Kuwait Dinar exchange rate** manipulation monitoring
 - **Islamic Banking** fraud detection
 - **Real Estate Investment** scam patterns for Kuwait market
 
-### 🕌 **Cultural Intelligence**
+### **Cultural Intelligence**
 - **Ramadan, Eid, Islamic holidays** themed attack detection
 - **Arabic-English mixed communications** analysis
 - **Cultural targeting** patterns and social engineering
@@ -47,7 +47,7 @@
 
 ---
 
-## 🚀 Quick Start for Kuwait SOCs
+## Quick Start for Kuwait SOCs
 
 ### **Prerequisites**
 - Microsoft 365 Defender with Advanced Hunting access
@@ -75,7 +75,7 @@ EmailEvents
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 M365-Defender-Kuwait-Hunting/
@@ -109,30 +109,30 @@ M365-Defender-Kuwait-Hunting/
 
 ---
 
-## 🔍 Featured Query Categories
+## Featured Query Categories
 
-### 🆔 **Personal Data Protection**
+### **Personal Data Protection**
 | Query | Purpose | Compliance |
 |-------|---------|------------|
 | `civil-id-detection.kql` | Kuwait Civil ID exposure | Kuwait Data Protection Law |
 | `passport-detection.kql` | Kuwait passport leakage | Privacy regulations |
 | `employment-docs.kql` | Salary certificates, work permits | Labor law compliance |
 
-### 🏦 **Financial Security**
+### **Financial Security**
 | Query | Purpose | Target |
 |-------|---------|--------|
 | `kuwait-iban.kql` | IBAN exposure detection | Banking |
 | `boursa-targeting.kql` | Stock market fraud | Investment |
 | `dinar-exchange.kql` | Currency manipulation | Forex |
 
-### 🏛️ **Critical Infrastructure**
+### **Critical Infrastructure**
 | Query | Purpose | Organization |
 |-------|---------|--------------|
 | `government-impersonation.kql` | Gov domain abuse | Government |
 | `cbk-targeting.kql` | Central Bank threats | Banking |
 | `oil-sector.kql` | Energy sector targeting | KPC, KNPC, KOC |
 
-### 🕌 **Cultural Intelligence**
+### **Cultural Intelligence**
 | Query | Purpose | Context |
 |-------|---------|---------|
 | `ramadan-attacks.kql` | Holiday-themed threats | Islamic calendar |
@@ -141,23 +141,23 @@ M365-Defender-Kuwait-Hunting/
 
 ---
 
-## 📊 Real-World Impact
+## Real-World Impact
 
 ### **Community Adoption**
-- **🏢 30+ Organizations** using these queries in Kuwait
-- **🛡️ 500+ Threats** detected and mitigated
-- **⏱️ 80% Reduction** in false positives for Kuwait context
-- **📈 200% Improvement** in regional threat detection
+- **30+ Organizations** using these queries in Kuwait
+- **500+ Threats** detected and mitigated
+- **80% Reduction** in false positives for Kuwait context
+- **200% Improvement** in regional threat detection
 
 ### **Coverage Metrics**
-- **🔍 150+ Hunting Queries** across all categories
-- **🎯 25+ Kuwait-Specific** threat patterns
-- **🌍 Complete MITRE ATT&CK** framework coverage
-- **📱 Arabic Language** analysis capabilities
+- **150+ Hunting Queries** across all categories
+- **25+ Kuwait-Specific** threat patterns
+- **Complete MITRE ATT&CK** framework coverage
+- **Arabic Language** analysis capabilities
 
 ---
 
-## 🛠️ PowerShell Automation
+## PowerShell Automation
 
 ### **Quick Deployment**
 ```powershell
@@ -179,23 +179,23 @@ M365-Defender-Kuwait-Hunting/
 
 ---
 
-## 🎓 Training & Resources
+## Training & Resources
 
 ### **SOC Analyst Training**
-- **🎯 Kuwait Threat Landscape** overview
-- **🔍 Civil ID Detection** best practices  
-- **📝 Arabic Language** threat analysis
-- **🏦 Financial Sector** specific threats
+- **Kuwait Threat Landscape** overview
+- **Civil ID Detection** best practices  
+- **Arabic Language** threat analysis
+- **Financial Sector** specific threats
 
 ### **Quick Reference**
-- 📖 **[Kuwait Cyber Threats](documentation/kuwait-threats.md)**
-- 🔧 **[Customization Guide](documentation/customization.md)**
-- 📊 **[Performance Tips](documentation/performance.md)**
-- 🚨 **[Incident Playbooks](documentation/playbooks.md)**
+- **[Kuwait Cyber Threats](documentation/kuwait-threats.md)**
+- **[Customization Guide](documentation/customization.md)**
+- **[Performance Tips](documentation/performance.md)**
+- **[Incident Playbooks](documentation/playbooks.md)**
 
 ---
 
-## 🤝 Community Contribution
+## Community Contribution
 
 ### **How to Contribute**
 1. **Fork** this repository
@@ -213,12 +213,12 @@ M365-Defender-Kuwait-Hunting/
 
 ---
 
-## 📞 Support & Services
+## Support & Services
 
 ### **Community Support**
-- **💬 GitHub Issues** - Bug reports and features
-- **📧 Email** - [site@hotmail.com](mailto:site@hotmail.com)
-- **💼 LinkedIn** - [Ali AlEnezi](https://linkedin.com/in/alenizi)
+- **GitHub Issues** - Bug reports and features
+- **Email** - [site@hotmail.com](mailto:site@hotmail.com)
+- **LinkedIn** - [Ali AlEnezi](https://linkedin.com/in/alenizi)
 
 ### **Professional Services**
 **Available for Kuwait Organizations:**
@@ -229,7 +229,7 @@ M365-Defender-Kuwait-Hunting/
 
 ---
 
-## ⚖️ Legal & Compliance
+## Legal & Compliance
 
 ### **Kuwait Data Protection**
 - ✅ **Personal Data Masking** - Automatic Civil ID anonymization
@@ -238,20 +238,20 @@ M365-Defender-Kuwait-Hunting/
 - ✅ **Legal Compliance** - Kuwait cybersecurity law adherence
 
 ### **Usage Guidelines**
-- 🔍 **Authorized Use Only** - Own or permitted environments
-- 📋 **Proper Documentation** - Maintain incident records
-- 🤝 **Responsible Disclosure** - Report through proper channels
-- ⚖️ **Local Law Compliance** - Adhere to Kuwait regulations
+- **Authorized Use Only** - Own or permitted environments
+- **Proper Documentation** - Maintain incident records
+- **Responsible Disclosure** - Report through proper channels
+- **Local Law Compliance** - Adhere to Kuwait regulations
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-**🛡️ Protecting Kuwait's Digital Infrastructure Through Advanced Threat Hunting**
+**Protecting Kuwait's Digital Infrastructure Through Advanced Threat Hunting**
 
 *Microsoft 365 Defender hunting queries designed specifically for Kuwait's cybersecurity needs*
 
@@ -264,7 +264,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 *Total Queries: 150+*  
 *Kuwait-Specific Patterns: 25+*  
 *Languages: English, العربية*
-
----
-
-**⭐ Star this repository to support Kuwait's cybersecurity community!**
